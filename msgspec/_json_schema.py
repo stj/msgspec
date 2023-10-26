@@ -90,14 +90,13 @@ def _collect_component_types(type_infos: Iterable[mi.Type]) -> dict[Any, mi.Type
     """Find all types in the type tree that are "nameable" and worthy of being
     extracted out into a shared top-level components mapping.
 
-    Currently this looks for Struct, Dataclass, NamedTuple, TypedDict, and Enum
-    types.
+    Currently this looks for Struct, NamedTuple, TypedDict, and Enum types.
     """
     components = {}
 
     def collect(t):
         if isinstance(
-            t, (mi.StructType, mi.TypedDictType, mi.DataclassType, mi.NamedTupleType)
+            t, (mi.StructType, mi.TypedDictType, mi.NamedTupleType)
         ):
             if t.cls not in components:
                 components[t.cls] = t
@@ -147,7 +146,7 @@ def _get_doc(t: mi.Type) -> str:
     if isinstance(t, mi.EnumType):
         if doc == "An enumeration.":
             return ""
-    elif isinstance(t, (mi.NamedTupleType, mi.DataclassType)):
+    elif isinstance(t, (mi.NamedTupleType,)):
         if doc.startswith(f"{cls.__name__}(") and doc.endswith(")"):
             return ""
     return doc
@@ -363,7 +362,7 @@ def _to_schema(
             schema["required"] = required
             if t.forbid_unknown_fields:
                 schema["additionalProperties"] = False
-    elif isinstance(t, (mi.TypedDictType, mi.DataclassType, mi.NamedTupleType)):
+    elif isinstance(t, (mi.TypedDictType, mi.NamedTupleType)):
         schema.setdefault("title", _get_class_name(t.cls))
         if doc := _get_doc(t):
             schema.setdefault("description", doc)

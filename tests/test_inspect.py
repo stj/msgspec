@@ -8,7 +8,6 @@ import typing
 import uuid
 from collections import namedtuple
 from copy import deepcopy
-from dataclasses import dataclass, field
 from typing import (
     Any,
     Dict,
@@ -606,98 +605,18 @@ def test_generic_typeddict():
     assert mi.type_info(Example[int]) == sol
 
 
-def test_dataclass():
-    @dataclass
-    class Example:
-        x: int
-        y: int = 0
-        z: str = field(default_factory=str)
-
-    sol = mi.DataclassType(
-        Example,
-        fields=(
-            mi.Field("x", "x", mi.IntType()),
-            mi.Field("y", "y", mi.IntType(), required=False, default=0),
-            mi.Field("z", "z", mi.StrType(), required=False, default_factory=str),
-        ),
-    )
-    assert mi.type_info(Example) == sol
-
-
-def test_attrs():
-    attrs = pytest.importorskip("attrs")
-
-    @attrs.define
-    class Example:
-        x: int
-        y: int = 0
-        z: str = attrs.field(factory=str)
-
-    sol = mi.DataclassType(
-        Example,
-        fields=(
-            mi.Field("x", "x", mi.IntType()),
-            mi.Field("y", "y", mi.IntType(), required=False, default=0),
-            mi.Field("z", "z", mi.StrType(), required=False, default_factory=str),
-        ),
-    )
-    assert mi.type_info(Example) == sol
-
-
-@pytest.mark.parametrize("module", ["dataclasses", "attrs"])
-def test_generic_dataclass_or_attrs(module):
-    m = pytest.importorskip(module)
-    decorator = m.define if module == "attrs" else m.dataclass
-
-    @decorator
-    class Example(Generic[T]):
-        a: T
-        b: List[T]
-
-    sol = mi.DataclassType(
-        Example,
-        fields=(
-            mi.Field("a", "a", mi.AnyType()),
-            mi.Field("b", "b", mi.ListType(mi.AnyType())),
-        ),
-    )
-    assert mi.type_info(Example) == sol
-
-    sol = mi.DataclassType(
-        Example[int],
-        fields=(
-            mi.Field("a", "a", mi.IntType()),
-            mi.Field("b", "b", mi.ListType(mi.IntType())),
-        ),
-    )
-    assert mi.type_info(Example[int]) == sol
-
-
-@pytest.mark.parametrize("kind", ["struct", "dataclass", "attrs"])
+@pytest.mark.parametrize("kind", ["struct"])
 def test_unset_fields(kind):
     if kind == "struct":
 
         class Ex(msgspec.Struct):
             x: Union[int, msgspec.UnsetType] = msgspec.UNSET
 
-    elif kind == "dataclass":
-
-        @dataclass
-        class Ex:
-            x: Union[int, msgspec.UnsetType] = msgspec.UNSET
-
-    elif kind == "attrs":
-        attrs = pytest.importorskip("attrs")
-
-        @attrs.define
-        class Ex:
-            x: Union[int, msgspec.UnsetType] = msgspec.UNSET
-
     res = mi.type_info(Ex)
     assert res.fields == (mi.Field("x", "x", mi.IntType(), required=False),)
 
 
-@pytest.mark.parametrize("kind", ["struct", "namedtuple", "typeddict", "dataclass"])
+@pytest.mark.parametrize("kind", ["struct", "namedtuple", "typeddict"])
 def test_self_referential_objects(kind):
     if kind == "struct":
         code = """
@@ -718,14 +637,6 @@ def test_self_referential_objects(kind):
         from typing import TypedDict
 
         class Node(TypedDict):
-            child: "Node"
-        """
-    elif kind == "dataclass":
-        code = """
-        from dataclasses import dataclass
-
-        @dataclass
-        class Node:
             child: "Node"
         """
 

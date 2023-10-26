@@ -4,6 +4,7 @@ import base64
 import datetime
 import decimal
 import enum
+import functools
 import gc
 import itertools
 import json
@@ -73,6 +74,21 @@ class Custom:
 
     def __eq__(self, other):
         return self.x == other.x and self.y == other.y
+
+
+@dataclass
+class Workshop:
+    id: str
+
+
+@functools.singledispatch
+def serializer(obj: Any):
+    raise TypeError("Unknown type")
+
+
+@serializer.register
+def _(obj: Workshop):
+    return {"id": obj.id, "extra": "extra"}
 
 
 class TestInvalidJSONTypes:
@@ -148,6 +164,12 @@ class TestEncodeFunction:
             msgspec.json.encode(object(), enc_hook=enc_hook)
 
         assert sys.getrefcount(enc_hook) == orig_refcount
+
+    def test_enc_hook_singledispatch_on_dataclass(self):
+        assert (
+            msgspec.json.encode(Workshop("x"), enc_hook=serializer)
+            == b'{"id":"x","extra":"extra"}'
+        )
 
     def test_encode_parse_arguments_errors(self):
         with pytest.raises(TypeError, match="Missing 1 required argument"):
@@ -2150,50 +2172,6 @@ class TestTypedDict:
     )
     def test_decode_typeddict_malformed(self, s, error):
         class Test(TypedDict, total=False):
-            a: int
-            b: int
-
-        with pytest.raises(msgspec.DecodeError, match=error):
-            msgspec.json.decode(s, type=Test)
-
-
-class TestDataclass:
-    """Most tests are in `test_common`, this just tests some JSON peculiarities"""
-
-    @pytest.mark.parametrize(
-        "s, x",
-        [
-            (b"{\t\n\r }", {}),
-            (b'{\t\n\r "a"    :     1}', {"a": 1}),
-            (b'{ "a"\t : 1 \n, "b": \r 2  }', {"a": 1, "b": 2}),
-            (b'   { "a"\t : 1 \n, "b": \r 2  }   ', {"a": 1, "b": 2}),
-        ],
-    )
-    def test_decode_dataclass_ignores_whitespace(self, s, x):
-        @dataclass
-        class Test:
-            a: int = -1
-            b: int = -2
-
-        x2 = msgspec.json.decode(s, type=Test)
-        assert x2 == Test(**x)
-
-    @pytest.mark.parametrize(
-        "s, error",
-        [
-            (b"{", "truncated"),
-            (b'{"a"', "truncated"),
-            (b"{,}", "object keys must be strings"),
-            (b"{:}", "object keys must be strings"),
-            (b"{1: 2}", "object keys must be strings"),
-            (b'{"a": 1, }', "trailing comma in object"),
-            (b'{"a": 1, "b" 2}', "expected ':'"),
-            (b'{"a": 1, "b": 2  "c"}', r"expected ',' or '}'"),
-        ],
-    )
-    def test_decode_typeddict_malformed(self, s, error):
-        @dataclass
-        class Test:
             a: int
             b: int
 

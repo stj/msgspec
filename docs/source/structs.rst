@@ -279,13 +279,13 @@ The generated ``__init__()`` for ``Subclass`` looks like:
     def __init__(self, c: float, d: bytes = b"", * a: str, b: int = 0):
 
 The field ordering rules for ``Struct`` types are identical to those for
-`dataclasses`, see the `dataclasses docs <dataclasses>`_ for more information.
+`dataclasses`.
 
 Class Variables
 ---------------
 
-Like `dataclasses`, `msgspec.Struct` types will exclude any attribute
-annotations wrapped in `typing.ClassVar` from their fields.
+`msgspec.Struct` types will exclude any attribute annotations wrapped in
+`typing.ClassVar` from their fields.
 
 .. code-block:: python
 

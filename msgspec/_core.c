@@ -401,7 +401,6 @@ typedef struct {
     PyObject *str__fields;
     PyObject *str__field_defaults;
     PyObject *str___post_init__;
-    PyObject *str___dataclass_fields__;
     PyObject *str___attrs_attrs__;
     PyObject *str___supertype__;
     PyObject *str___bound__;
@@ -424,7 +423,6 @@ typedef struct {
     PyObject *get_type_hints;
     PyObject *get_class_annotations;
     PyObject *get_typeddict_info;
-    PyObject *get_dataclass_info;
     PyObject *rebuild;
 #if PY_VERSION_HEX >= 0x030a00f0
     PyObject *types_uniontype;
@@ -2147,7 +2145,7 @@ PyDoc_STRVAR(unset__doc__,
 "in an object needs to be treated differently than one containing an explicit\n"
 "``None`` value. In this case, you may use ``UNSET`` as the default value,\n"
 "rather than ``None`` when defining object schemas. This feature is supported\n"
-"for any `msgspec.Struct`, `dataclasses` or `attrs` types.\n"
+"for any `msgspec.Struct` types.\n"
 "\n"
 "Examples\n"
 "--------\n"
@@ -2509,8 +2507,7 @@ static PyTypeObject Field_Type = {
 #define MS_TYPE_INTLITERAL          (1ull << 30)
 #define MS_TYPE_STRLITERAL          (1ull << 31)
 #define MS_TYPE_TYPEDDICT           (1ull << 32)
-#define MS_TYPE_DATACLASS           (1ull << 33)
-#define MS_TYPE_NAMEDTUPLE          (1ull << 34)
+#define MS_TYPE_NAMEDTUPLE          (1ull << 33)
 /* Constraints */
 #define MS_CONSTR_INT_MIN           (1ull << 42)
 #define MS_CONSTR_INT_MAX           (1ull << 43)
@@ -2531,7 +2528,7 @@ static PyTypeObject Field_Type = {
 #define MS_CONSTR_MAP_MAX_LENGTH    (1ull << 58)
 #define MS_CONSTR_TZ_AWARE          (1ull << 59)
 #define MS_CONSTR_TZ_NAIVE          (1ull << 60)
-/* Extra flag bit, used by TypedDict/dataclass implementations */
+/* Extra flag bit, used by TypedDict implementations */
 #define MS_EXTRA_FLAG               (1ull << 63)
 
 /* A TypeNode encodes information about all types at the same hierarchy in the
@@ -2553,7 +2550,7 @@ static PyTypeObject Field_Type = {
  * O | STRUCT | STRUCT_ARRAY | STRUCT_UNION | STRUCT_ARRAY_UNION | CUSTOM |
  * O | INTENUM | INTLITERAL |
  * O | ENUM | STRLITERAL |
- * O | TYPEDDICT | DATACLASS |
+ * O | TYPEDDICT |
  * O | NAMEDTUPLE |
  * O | STR_REGEX |
  * T | DICT [key, value] |
@@ -2582,7 +2579,7 @@ static PyTypeObject Field_Type = {
 )
 #define SLOT_01 (MS_TYPE_INTENUM | MS_TYPE_INTLITERAL)
 #define SLOT_02 (MS_TYPE_ENUM | MS_TYPE_STRLITERAL)
-#define SLOT_03 (MS_TYPE_TYPEDDICT | MS_TYPE_DATACLASS)
+#define SLOT_03 MS_TYPE_TYPEDDICT
 #define SLOT_04 MS_TYPE_NAMEDTUPLE
 #define SLOT_05 MS_CONSTR_STR_REGEX
 #define SLOT_06 MS_TYPE_DICT
@@ -2648,20 +2645,6 @@ typedef struct {
 } TypedDictInfo;
 
 typedef struct {
-    PyObject *key;
-    TypeNode *type;
-} DataclassField;
-
-typedef struct {
-    PyObject_VAR_HEAD
-    PyObject *class;
-    PyObject *pre_init;
-    PyObject *post_init;
-    PyObject *defaults;
-    DataclassField fields[];
-} DataclassInfo;
-
-typedef struct {
     PyObject_VAR_HEAD
     PyObject *class;
     PyObject *defaults;
@@ -2708,7 +2691,6 @@ typedef struct {
 
 static PyTypeObject LiteralInfo_Type;
 static PyTypeObject TypedDictInfo_Type;
-static PyTypeObject DataclassInfo_Type;
 static PyTypeObject NamedTupleInfo_Type;
 static PyTypeObject StructInfo_Type;
 static PyTypeObject StructMetaType;
@@ -2716,7 +2698,6 @@ static PyTypeObject Ext_Type;
 static TypeNode* TypeNode_Convert(PyObject *type);
 static PyObject* StructInfo_Convert(PyObject*);
 static PyObject* TypedDictInfo_Convert(PyObject*);
-static PyObject* DataclassInfo_Convert(PyObject*);
 static PyObject* NamedTupleInfo_Convert(PyObject*);
 
 #define StructMeta_GET_FIELDS(s) (((StructMetaObject *)(s))->struct_fields)
@@ -2761,12 +2742,6 @@ TypeNode_get_str_enum_or_literal(TypeNode *type) {
 
 static MS_INLINE TypedDictInfo *
 TypeNode_get_typeddict_info(TypeNode *type) {
-    Py_ssize_t i = ms_popcount(type->types & (SLOT_00 | SLOT_01 | SLOT_02));
-    return type->details[i].pointer;
-}
-
-static MS_INLINE DataclassInfo *
-TypeNode_get_dataclass_info(TypeNode *type) {
     Py_ssize_t i = ms_popcount(type->types & (SLOT_00 | SLOT_01 | SLOT_02));
     return type->details[i].pointer;
 }
@@ -3001,8 +2976,7 @@ TypeNode_get_traverse_ranges(
                 MS_TYPE_STRUCT_ARRAY | MS_TYPE_STRUCT_ARRAY_UNION |
                 MS_TYPE_INTENUM | MS_TYPE_INTLITERAL |
                 MS_TYPE_ENUM | MS_TYPE_STRLITERAL |
-                MS_TYPE_TYPEDDICT | MS_TYPE_DATACLASS |
-                MS_TYPE_NAMEDTUPLE
+                MS_TYPE_TYPEDDICT | MS_TYPE_NAMEDTUPLE
             )
         );
         /* Number of typenode details */
@@ -3111,7 +3085,7 @@ typenode_simple_repr(TypeNode *self) {
     }
     if (self->types & (
             MS_TYPE_STRUCT | MS_TYPE_STRUCT_UNION |
-            MS_TYPE_TYPEDDICT | MS_TYPE_DATACLASS | MS_TYPE_DICT
+            MS_TYPE_TYPEDDICT | MS_TYPE_DICT
         )
     ) {
         if (!strbuilder_extend_literal(&builder, "object")) return NULL;
@@ -3159,7 +3133,6 @@ typedef struct {
     PyObject *dict_key_obj;
     PyObject *dict_val_obj;
     PyObject *typeddict_obj;
-    PyObject *dataclass_obj;
     PyObject *namedtuple_obj;
     PyObject *literals;
     PyObject *literal_int_values;
@@ -3481,7 +3454,7 @@ typenode_from_collect_state(TypeNodeCollectState *state) {
             MS_TYPE_CUSTOM | MS_TYPE_CUSTOM_GENERIC |
             MS_TYPE_INTENUM | MS_TYPE_INTLITERAL |
             MS_TYPE_ENUM | MS_TYPE_STRLITERAL |
-            MS_TYPE_TYPEDDICT | MS_TYPE_DATACLASS |
+            MS_TYPE_TYPEDDICT |
             MS_TYPE_NAMEDTUPLE |
             MS_CONSTR_STR_REGEX |
             MS_TYPE_DICT |
@@ -3610,11 +3583,6 @@ typenode_from_collect_state(TypeNodeCollectState *state) {
     }
     if (state->typeddict_obj != NULL) {
         PyObject *info = TypedDictInfo_Convert(state->typeddict_obj);
-        if (info == NULL) goto error;
-        out->details[e_ind++].pointer = info;
-    }
-    if (state->dataclass_obj != NULL) {
-        PyObject *info = DataclassInfo_Convert(state->dataclass_obj);
         if (info == NULL) goto error;
         out->details[e_ind++].pointer = info;
     }
@@ -3772,8 +3740,7 @@ typenode_collect_check_invariants(TypeNodeCollectState *state) {
     /* Ensure at most one dict-like type in the union */
     int ndictlike = ms_popcount(
         state->types & (
-            MS_TYPE_STRUCT | MS_TYPE_STRUCT_UNION |
-            MS_TYPE_TYPEDDICT | MS_TYPE_DATACLASS
+            MS_TYPE_STRUCT | MS_TYPE_STRUCT_UNION | MS_TYPE_TYPEDDICT
         )
     );
     if (state->types & MS_TYPE_DICT) {
@@ -3783,8 +3750,7 @@ typenode_collect_check_invariants(TypeNodeCollectState *state) {
         PyErr_Format(
             PyExc_TypeError,
             "Type unions may not contain more than one dict-like type "
-            "(`Struct`, `dict`, `TypedDict`, `dataclass`) - type `%R` "
-            "is not supported",
+            "(`Struct`, `dict`, `TypedDict`) - type `%R` is not supported",
             state->context
         );
         return -1;
@@ -4007,17 +3973,6 @@ typenode_collect_typeddict(TypeNodeCollectState *state, PyObject *obj) {
     state->types |= MS_TYPE_TYPEDDICT;
     Py_INCREF(obj);
     state->typeddict_obj = obj;
-    return 0;
-}
-
-static int
-typenode_collect_dataclass(TypeNodeCollectState *state, PyObject *obj) {
-    if (state->dataclass_obj != NULL) {
-        return typenode_collect_err_unique(state, "dataclass or attrs");
-    }
-    state->types |= MS_TYPE_DATACLASS;
-    Py_INCREF(obj);
-    state->dataclass_obj = obj;
     return 0;
 }
 
@@ -4368,7 +4323,6 @@ typenode_collect_clear_state(TypeNodeCollectState *state) {
     Py_CLEAR(state->dict_key_obj);
     Py_CLEAR(state->dict_val_obj);
     Py_CLEAR(state->typeddict_obj);
-    Py_CLEAR(state->dataclass_obj);
     Py_CLEAR(state->namedtuple_obj);
     Py_CLEAR(state->literals);
     Py_CLEAR(state->literal_int_values);
@@ -4527,16 +4481,6 @@ is_typeddict_class(TypeNodeCollectState *state, PyObject *t) {
         PyType_Check(t)
         && PyType_IsSubtype((PyTypeObject *)t, &PyDict_Type)
         && PyObject_HasAttr(t, state->mod->str___total__)
-    );
-}
-
-static bool
-is_dataclass_or_attrs_class(TypeNodeCollectState *state, PyObject *t) {
-    return (
-        PyType_Check(t) && (
-            PyObject_HasAttr(t, state->mod->str___dataclass_fields__) ||
-            PyObject_HasAttr(t, state->mod->str___attrs_attrs__)
-        )
     );
 }
 
@@ -4715,12 +4659,6 @@ typenode_collect_type(TypeNodeCollectState *state, PyObject *obj) {
         (origin != NULL && is_namedtuple_class(state, origin))
     ) {
         out = typenode_collect_namedtuple(state, t);
-    }
-    else if (
-        is_dataclass_or_attrs_class(state, t) ||
-        (origin != NULL && is_dataclass_or_attrs_class(state, origin))
-    ) {
-        out = typenode_collect_dataclass(state, t);
     }
     else {
         if (origin != NULL) {
@@ -7268,11 +7206,7 @@ PyDoc_STRVAR(struct_replace__doc__,
 "...     y: int\n"
 ">>> obj = Point(x=1, y=2)\n"
 ">>> msgspec.structs.replace(obj, x=3)\n"
-"Point(x=3, y=2)\n"
-"\n"
-"See Also\n"
-"--------\n"
-"dataclasses.replace"
+"Point(x=3, y=2)"
 );
 static PyObject*
 struct_replace(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
@@ -7899,225 +7833,6 @@ static PyTypeObject TypedDictInfo_Type = {
     .tp_dealloc = (destructor)TypedDictInfo_dealloc,
 };
 
-static PyObject *
-DataclassInfo_Convert(PyObject *obj) {
-    PyObject *cls = NULL, *fields = NULL, *field_defaults = NULL;
-    PyObject *pre_init = NULL, *post_init = NULL;
-    DataclassInfo *info = NULL;
-    MsgspecState *mod = msgspec_get_global_state();
-    bool cache_set = false, succeeded = false;
-
-    PyObject *cached = NULL;
-    if (get_msgspec_cache(mod, obj, &DataclassInfo_Type, &cached)) {
-        return cached;
-    }
-
-    /* Not cached, extract fields from Dataclass object */
-    PyObject *temp = CALL_ONE_ARG(mod->get_dataclass_info, obj);
-    if (temp == NULL) return NULL;
-    cls = PyTuple_GET_ITEM(temp, 0);
-    Py_INCREF(cls);
-    fields = PyTuple_GET_ITEM(temp, 1);
-    Py_INCREF(fields);
-    field_defaults = PyTuple_GET_ITEM(temp, 2);
-    Py_INCREF(field_defaults);
-    pre_init = PyTuple_GET_ITEM(temp, 3);
-    Py_INCREF(pre_init);
-    post_init = PyTuple_GET_ITEM(temp, 4);
-    Py_INCREF(post_init);
-    Py_DECREF(temp);
-
-    /* Allocate and zero-out a new DataclassInfo object */
-    Py_ssize_t nfields = PyTuple_GET_SIZE(fields);
-    info = PyObject_GC_NewVar(DataclassInfo, &DataclassInfo_Type, nfields);
-    if (info == NULL) goto cleanup;
-    for (Py_ssize_t i = 0; i < nfields; i++) {
-        info->fields[i].key = NULL;
-        info->fields[i].type = NULL;
-    }
-    Py_INCREF(field_defaults);
-    info->defaults = field_defaults;
-    Py_INCREF(cls);
-    info->class = cls;
-    if (pre_init == Py_None) {
-        info->pre_init = NULL;
-    }
-    else {
-        Py_INCREF(pre_init);
-        info->pre_init = pre_init;
-    }
-    if (post_init == Py_None) {
-        info->post_init = NULL;
-    }
-    else {
-        Py_INCREF(post_init);
-        info->post_init = post_init;
-    }
-
-    /* If not already cached, then cache on Dataclass object _before_
-    * traversing fields. This is to ensure self-referential Dataclasses work. */
-    if (PyObject_SetAttr(obj, mod->str___msgspec_cache__, (PyObject *)info) < 0) {
-        goto cleanup;
-    }
-    cache_set = true;
-
-    /* Traverse fields and initialize DataclassInfo */
-    for (Py_ssize_t i = 0; i < nfields; i++) {
-        PyObject *field = PyTuple_GET_ITEM(fields, i);
-        TypeNode *type = TypeNode_Convert(PyTuple_GET_ITEM(field, 1));
-        if (type == NULL) goto cleanup;
-        /* If field has a default factory, set extra flag bit */
-        if (PyObject_IsTrue(PyTuple_GET_ITEM(field, 2))) {
-            type->types |= MS_EXTRA_FLAG;
-        }
-        info->fields[i].type = type;
-        info->fields[i].key = PyTuple_GET_ITEM(field, 0);
-        Py_INCREF(info->fields[i].key);
-    }
-
-    PyObject_GC_Track(info);
-    succeeded = true;
-
-cleanup:
-    if (!succeeded) {
-        Py_CLEAR(info);
-        if (cache_set) {
-            /* An error occurred after the cache was created and set on the
-            * Dataclass. We need to delete the attribute. Fetch and restore the
-            * original exception to avoid DelAttr silently clearing it on rare
-            * occasions. */
-            PyObject *err_type, *err_value, *err_tb;
-            PyErr_Fetch(&err_type, &err_value, &err_tb);
-            PyObject_DelAttr(obj, mod->str___msgspec_cache__);
-            PyErr_Restore(err_type, err_value, err_tb);
-        }
-    }
-    Py_XDECREF(cls);
-    Py_XDECREF(fields);
-    Py_XDECREF(field_defaults);
-    Py_XDECREF(pre_init);
-    Py_XDECREF(post_init);
-    return (PyObject *)info;
-}
-
-static MS_INLINE PyObject *
-DataclassInfo_lookup_key(
-    DataclassInfo *self, const char * key, Py_ssize_t key_size,
-    TypeNode **type, Py_ssize_t *pos
-) {
-    const char *field;
-    Py_ssize_t nfields, field_size, i, offset = *pos;
-    nfields = Py_SIZE(self);
-    for (i = offset; i < nfields; i++) {
-        field = unicode_str_and_size_nocheck(self->fields[i].key, &field_size);
-        if (key_size == field_size && memcmp(key, field, key_size) == 0) {
-            *pos = i < (nfields - 1) ? (i + 1) : 0;
-            *type = self->fields[i].type;
-            return self->fields[i].key;
-        }
-    }
-    for (i = 0; i < offset; i++) {
-        field = unicode_str_and_size_nocheck(self->fields[i].key, &field_size);
-        if (key_size == field_size && memcmp(key, field, key_size) == 0) {
-            *pos = i + 1;
-            *type = self->fields[i].type;
-            return self->fields[i].key;
-        }
-    }
-    return NULL;
-}
-
-
-static int
-DataclassInfo_post_decode(DataclassInfo *self, PyObject *obj, PathNode *path) {
-    Py_ssize_t nfields = Py_SIZE(self);
-    Py_ssize_t ndefaults = PyTuple_GET_SIZE(self->defaults);
-
-    for (Py_ssize_t i = 0; i < nfields; i++) {
-        PyObject *name = self->fields[i].key;
-        if (!PyObject_HasAttr(obj, name)) {
-            if (i < (nfields - ndefaults)) {
-                ms_missing_required_field(name, path);
-                return -1;
-            }
-            else {
-                PyObject *default_value = PyTuple_GET_ITEM(
-                    self->defaults, i - (nfields - ndefaults)
-                );
-                bool is_factory = self->fields[i].type->types & MS_EXTRA_FLAG;
-                if (is_factory) {
-                    default_value = CALL_NO_ARGS(default_value);
-                    if (default_value == NULL) return -1;
-                }
-                int status = PyObject_GenericSetAttr(obj, name, default_value);
-                if (is_factory) {
-                    Py_DECREF(default_value);
-                }
-                if (status < 0) return -1;
-            }
-        }
-    }
-    if (self->post_init != NULL) {
-        PyObject *res = CALL_ONE_ARG(self->post_init, obj);
-        if (res == NULL) {
-            ms_maybe_wrap_validation_error(path);
-            return -1;
-        }
-        Py_DECREF(res);
-    }
-    return 0;
-}
-
-static int
-DataclassInfo_traverse(DataclassInfo *self, visitproc visit, void *arg)
-{
-    for (Py_ssize_t i = 0; i < Py_SIZE(self); i++) {
-        DataclassField *field = &(self->fields[i]);
-        if (field->key != NULL) {
-            int out = TypeNode_traverse(field->type, visit, arg);
-            if (out != 0) return out;
-        }
-    }
-    Py_VISIT(self->defaults);
-    Py_VISIT(self->class);
-    Py_VISIT(self->pre_init);
-    Py_VISIT(self->post_init);
-    return 0;
-}
-
-static int
-DataclassInfo_clear(DataclassInfo *self)
-{
-    for (Py_ssize_t i = 0; i < Py_SIZE(self); i++) {
-        Py_CLEAR(self->fields[i].key);
-        TypeNode_Free(self->fields[i].type);
-        self->fields[i].type = NULL;
-    }
-    Py_CLEAR(self->defaults);
-    Py_CLEAR(self->class);
-    Py_CLEAR(self->pre_init);
-    Py_CLEAR(self->post_init);
-    return 0;
-}
-
-static void
-DataclassInfo_dealloc(DataclassInfo *self)
-{
-    PyObject_GC_UnTrack(self);
-    DataclassInfo_clear(self);
-    Py_TYPE(self)->tp_free((PyObject *)self);
-}
-
-static PyTypeObject DataclassInfo_Type = {
-    PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "msgspec._core.DataclassInfo",
-    .tp_basicsize = sizeof(DataclassInfo),
-    .tp_itemsize = sizeof(DataclassField),
-    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
-    .tp_clear = (inquiry)DataclassInfo_clear,
-    .tp_traverse = (traverseproc)DataclassInfo_traverse,
-    .tp_dealloc = (destructor)DataclassInfo_dealloc,
-};
 
 static PyObject *
 NamedTupleInfo_Convert(PyObject *obj) {
@@ -8420,126 +8135,6 @@ static PyTypeObject Ext_Type = {
     .tp_methods = Ext_methods
 };
 
-/*************************************************************************
- * Dataclass Utilities                                                   *
- *************************************************************************/
-
-typedef struct {
-    PyObject *obj;
-    PyObject *fields;
-    PyObject *dict;
-    Py_ssize_t fields_pos;
-    Py_ssize_t dict_pos;
-    bool fastpath;
-    bool standard_getattr;
-} DataclassIter;
-
-static bool
-dataclass_iter_setup(DataclassIter *iter, PyObject *obj, PyObject *fields) {
-    iter->dict = NULL;
-
-    if (MS_UNLIKELY(!PyDict_CheckExact(fields))) {
-        PyErr_Format(PyExc_RuntimeError, "%R.__dataclass_fields__ is not a dict", obj);
-        return false;
-    }
-
-    iter->obj = obj;
-    iter->fields = fields;
-    iter->fields_pos = 0;
-    iter->dict_pos = 0;
-    iter->fastpath = false;
-    iter->standard_getattr = (
-        Py_TYPE(obj)->tp_getattro == PyObject_GenericGetAttr
-    );
-    if (iter->standard_getattr) {
-        iter->dict = PyObject_GenericGetDict(obj, NULL);
-        if (iter->dict == NULL) {
-            PyErr_Clear();
-        }
-        else if (PyDict_GET_SIZE(fields) == PyDict_GET_SIZE(iter->dict)) {
-            iter->fastpath = true;
-        }
-    }
-    return true;
-}
-
-static void
-dataclass_iter_cleanup(DataclassIter *iter) {
-    Py_XDECREF(iter->dict);
-}
-
-static MS_INLINE bool
-dataclass_iter_next(
-    DataclassIter *iter,
-    PyObject **field_name,
-    PyObject **field_val
-) {
-    PyObject *name, *key, *val;
-
-next_field:
-    if (!PyDict_Next(iter->fields, &(iter->fields_pos), &name, NULL)) {
-        return false;
-    }
-    if (MS_UNLIKELY(!PyUnicode_CheckExact(name))) goto next_field;
-
-    if (MS_LIKELY(iter->fastpath)) {
-        if (
-            PyDict_Next(iter->dict, &(iter->dict_pos), &key, &val) &&
-            (key == name)
-        ) {
-            Py_INCREF(val);
-            goto found_val;
-        }
-        else {
-            iter->fastpath = false;
-        }
-    }
-
-    PyTypeObject *type = Py_TYPE(iter->obj);
-
-    if (MS_LIKELY(iter->standard_getattr)) {
-        if (iter->dict != NULL) {
-            /* We know it's already hashed, it came from a dict */
-            Py_hash_t hash = ((PyASCIIObject *)name)->hash;
-            val = _PyDict_GetItem_KnownHash(iter->dict, name, hash);
-            if (val != NULL) {
-                Py_INCREF(val);
-                goto found_val;
-            }
-        }
-
-        PyObject *descr = _PyType_Lookup(type, name);
-        if (descr != NULL) {
-            descrgetfunc get = Py_TYPE(descr)->tp_descr_get;
-            descrsetfunc set = Py_TYPE(descr)->tp_descr_set;
-            if (get != NULL && set != NULL) {
-                Py_INCREF(descr);
-                val = get(descr, iter->obj, (PyObject *)type);
-                Py_DECREF(descr);
-                if (val != NULL) goto found_val;
-                PyErr_Clear();
-            }
-        }
-        goto next_field;
-    }
-    else {
-        val = type->tp_getattro(iter->obj, name);
-        if (val == NULL) {
-            PyErr_Clear();
-            goto next_field;
-        }
-        goto found_val;
-    }
-
-found_val:
-    if (MS_UNLIKELY(val == UNSET)) {
-        Py_DECREF(val);
-        goto next_field;
-    }
-    *field_name = name;
-    *field_val = val;
-    return true;
-}
 
 /*************************************************************************
  * Shared Encoder structs/methods                                        *
@@ -11879,150 +11474,6 @@ error:
 }
 
 static int
-mpack_encode_dataclass(EncoderState *self, PyObject *obj, PyObject *fields)
-{
-    if (Py_EnterRecursiveCall(" while serializing an object")) return -1;
-
-    int status = -1;
-    DataclassIter iter;
-    if (!dataclass_iter_setup(&iter, obj, fields)) goto cleanup;
-
-    /* Cache header offset in case we need to adjust the header after writing */
-    Py_ssize_t header_offset = self->output_len;
-    Py_ssize_t max_size = PyDict_GET_SIZE(fields);
-    if (mpack_encode_map_header(self, max_size, "objects") < 0) goto cleanup;
-
-    Py_ssize_t size = 0;
-    PyObject *field, *val;
-    while (dataclass_iter_next(&iter, &field, &val)) {
-        size++;
-        Py_ssize_t field_len;
-        const char* field_buf = unicode_str_and_size(field, &field_len);
-        bool errored = (
-            (field_buf == NULL) ||
-            (mpack_encode_cstr(self, field_buf, field_len) < 0) ||
-            (mpack_encode(self, val) < 0)
-        );
-        Py_DECREF(val);
-        if (errored) goto cleanup;
-    }
-
-    if (MS_UNLIKELY(size != max_size)) {
-        /* Some fields were skipped, need to adjust header. We write the header
-         * using the width type of `max_size`, but the value of `size`. */
-        char *header_loc = self->output_buffer_raw + header_offset;
-        if (max_size < 16) {
-            *header_loc = MP_FIXMAP | size;
-        } else if (max_size < (1 << 16)) {
-            *header_loc++ = MP_MAP16;
-            _msgspec_store16(header_loc, (uint16_t)size);
-        } else {
-            *header_loc++ = MP_MAP32;
-            _msgspec_store32(header_loc, (uint32_t)size);
-        }
-    }
-    status = 0;
-
-cleanup:
-    Py_LeaveRecursiveCall();
-    dataclass_iter_cleanup(&iter);
-    return status;
-}
-
-/* This method encodes an object as a map, with fields taken from `__dict__`,
- * followed by all `__slots__` in the class hierarchy. Any unset slots are
- * ignored, and `__weakref__` is not included. */
-static int
-mpack_encode_object(EncoderState *self, PyObject *obj)
-{
-    int status = -1;
-    Py_ssize_t size = 0, max_size;
-
-    if (Py_EnterRecursiveCall(" while serializing an object")) return -1;
-
-    /* Calculate the maximum number of fields that could be part of this object.
-     * This is roughly equal to:
-     *     max_size = size = len(getattr(obj, '__dict__', {}))
-     *     max_size += sum(len(getattr(c, '__slots__', ())) for c in type(obj).mro())
-     */
-    PyObject *dict = PyObject_GenericGetDict(obj, NULL);
-    if (MS_UNLIKELY(dict == NULL)) {
-        PyErr_Clear();
-        max_size = 0;
-    }
-    else {
-        max_size = PyDict_GET_SIZE(dict);
-    }
-
-    PyTypeObject *type = Py_TYPE(obj);
-    while (type != NULL) {
-        max_size += Py_SIZE(type);
-        type = type->tp_base;
-    }
-    /* Cache header offset in case we need to adjust the header after writing */
-    Py_ssize_t header_offset = self->output_len;
-    if (mpack_encode_map_header(self, max_size, "objects") < 0) goto cleanup;
-
-    /* First encode everything in `__dict__` */
-    if (dict != NULL) {
-        PyObject *key, *val;
-        Py_ssize_t pos = 0;
-        while (PyDict_Next(dict, &pos, &key, &val)) {
-            if (MS_LIKELY(PyUnicode_CheckExact(key))) {
-                Py_ssize_t key_len;
-                if (MS_UNLIKELY(val == UNSET)) continue;
-                const char* key_buf = unicode_str_and_size(key, &key_len);
-                if (MS_UNLIKELY(key_buf == NULL)) goto cleanup;
-                if (MS_UNLIKELY(*key_buf == '_')) continue;
-                if (MS_UNLIKELY(mpack_encode_cstr(self, key_buf, key_len) < 0)) goto cleanup;
-                if (MS_UNLIKELY(mpack_encode(self, val) < 0)) goto cleanup;
-                size++;
-            }
-        }
-    }
-    /* Then encode everything in slots */
-    type = Py_TYPE(obj);
-    while (type != NULL) {
-        Py_ssize_t n = Py_SIZE(type);
-        if (n) {
-            PyMemberDef *mp = MS_PyHeapType_GET_MEMBERS((PyHeapTypeObject *)type);
-            for (Py_ssize_t i = 0; i < n; i++, mp++) {
-                if (MS_LIKELY(mp->type == T_OBJECT_EX && !(mp->flags & READONLY))) {
-                    char *addr = (char *)obj + mp->offset;
-                    PyObject *val = *(PyObject **)addr;
-                    if (MS_UNLIKELY(val == UNSET)) continue;
-                    if (MS_UNLIKELY(val == NULL)) continue;
-                    if (MS_UNLIKELY(*mp->name == '_')) continue;
-                    if (MS_UNLIKELY(mpack_encode_cstr(self, mp->name, strlen(mp->name)) < 0)) goto cleanup;
-                    if (MS_UNLIKELY(mpack_encode(self, val) < 0)) goto cleanup;
-                    size++;
-                }
-            }
-        }
-        type = type->tp_base;
-    }
-    if (MS_UNLIKELY(size != max_size)) {
-        /* Some fields were NULL, need to adjust header. We write the header
-         * using the width type of `max_size`, but the value of `size`. */
-        char *header_loc = self->output_buffer_raw + header_offset;
-        if (max_size < 16) {
-            *header_loc = MP_FIXMAP | size;
-        } else if (max_size < (1 << 16)) {
-            *header_loc++ = MP_MAP16;
-            _msgspec_store16(header_loc, (uint16_t)size);
-        } else {
-            *header_loc++ = MP_MAP32;
-            _msgspec_store32(header_loc, (uint32_t)size);
-        }
-    }
-    status = 0;
-cleanup:
-    Py_XDECREF(dict);
-    Py_LeaveRecursiveCall();
-    return status;
-}
-
-static int
 mpack_encode_struct(EncoderState *self, PyObject *obj)
 {
     PyObject *key, *val, *fields, *tag_field, *tag_value;
@@ -12389,20 +11840,6 @@ mpack_encode_uncommon(EncoderState *self, PyTypeObject *type, PyObject *obj)
     }
     else if (PyAnySet_Check(obj)) {
         return mpack_encode_set(self, obj);
-    }
-    else if (type->tp_dict != NULL) {
-        PyObject *fields = PyObject_GetAttr(obj, self->mod->str___dataclass_fields__);
-        if (fields != NULL) {
-            int status = mpack_encode_dataclass(self, obj, fields);
-            Py_DECREF(fields);
-            return status;
-        }
-        else {
-            PyErr_Clear();
-        }
-        if (PyDict_Contains(type->tp_dict, self->mod->str___attrs_attrs__)) {
-            return mpack_encode_object(self, obj);
-        }
     }
 
     if (self->enc_hook != NULL) {
@@ -13096,117 +12533,6 @@ cleanup:
 }
 
 static int
-json_encode_dataclass(EncoderState *self, PyObject *obj, PyObject *fields)
-{
-    if (Py_EnterRecursiveCall(" while serializing an object")) return -1;
-
-    int status = -1;
-    DataclassIter iter;
-    if (!dataclass_iter_setup(&iter, obj, fields)) goto cleanup;
-
-    if (ms_write(self, "{", 1) < 0) goto cleanup;
-    Py_ssize_t start_offset = self->output_len;
-
-    PyObject *field, *val;
-    while (dataclass_iter_next(&iter, &field, &val)) {
-        Py_ssize_t field_len;
-        const char* field_buf = unicode_str_and_size(field, &field_len);
-        bool errored = (
-            (field_buf == NULL) ||
-            (json_encode_cstr(self, field_buf, field_len) < 0) ||
-            (ms_write(self, ":", 1) < 0) ||
-            (json_encode(self, val) < 0) ||
-            (ms_write(self, ",", 1) < 0)
-        );
-        Py_DECREF(val);
-        if (errored) goto cleanup;
-    }
-
-    /* If any fields written, overwrite trailing comma with }, otherwise append } */
-    if (MS_LIKELY(self->output_len != start_offset)) {
-        *(self->output_buffer_raw + self->output_len - 1) = '}';
-        status = 0;
-    }
-    else {
-        status = ms_write(self, "}", 1);
-    }
-
-cleanup:
-    Py_LeaveRecursiveCall();
-    dataclass_iter_cleanup(&iter);
-    return status;
-}
-
-/* This method encodes an object as a map, with fields taken from `__dict__`,
- * followed by all `__slots__` in the class hierarchy. Any unset slots are
- * ignored, and `__weakref__` is not included. */
-static int
-json_encode_object(EncoderState *self, PyObject *obj)
-{
-    int status = -1;
-    if (ms_write(self, "{", 1) < 0) return -1;
-    Py_ssize_t start_offset = self->output_len;
-
-    if (Py_EnterRecursiveCall(" while serializing an object")) return -1;
-    /* First encode everything in `__dict__` */
-    PyObject *dict = PyObject_GenericGetDict(obj, NULL);
-    if (MS_UNLIKELY(dict == NULL)) {
-        PyErr_Clear();
-    }
-    else {
-        PyObject *key, *val;
-        Py_ssize_t pos = 0;
-        while (PyDict_Next(dict, &pos, &key, &val)) {
-            if (MS_LIKELY(PyUnicode_CheckExact(key))) {
-                Py_ssize_t key_len;
-                const char* key_buf = unicode_str_and_size(key, &key_len);
-                if (MS_UNLIKELY(val == UNSET)) continue;
-                if (MS_UNLIKELY(key_buf == NULL)) goto cleanup;
-                if (MS_UNLIKELY(*key_buf == '_')) continue;
-                if (MS_UNLIKELY(json_encode_cstr(self, key_buf, key_len) < 0)) goto cleanup;
-                if (MS_UNLIKELY(ms_write(self, ":", 1) < 0)) goto cleanup;
-                if (MS_UNLIKELY(json_encode(self, val) < 0)) goto cleanup;
-                if (MS_UNLIKELY(ms_write(self, ",", 1) < 0)) goto cleanup;
-            }
-        }
-    }
-    /* Then encode everything in slots */
-    PyTypeObject *type = Py_TYPE(obj);
-    while (type != NULL) {
-        Py_ssize_t n = Py_SIZE(type);
-        if (n) {
-            PyMemberDef *mp = MS_PyHeapType_GET_MEMBERS((PyHeapTypeObject *)type);
-            for (Py_ssize_t i = 0; i < n; i++, mp++) {
-                if (MS_LIKELY(mp->type == T_OBJECT_EX && !(mp->flags & READONLY))) {
-                    char *addr = (char *)obj + mp->offset;
-                    PyObject *val = *(PyObject **)addr;
-                    if (MS_UNLIKELY(val == NULL)) continue;
-                    if (MS_UNLIKELY(val == UNSET)) continue;
-                    if (MS_UNLIKELY(*mp->name == '_')) continue;
-                    if (MS_UNLIKELY(json_encode_cstr(self, mp->name, strlen(mp->name)) < 0)) goto cleanup;
-                    if (MS_UNLIKELY(ms_write(self, ":", 1) < 0)) goto cleanup;
-                    if (MS_UNLIKELY(json_encode(self, val) < 0)) goto cleanup;
-                    if (MS_UNLIKELY(ms_write(self, ",", 1) < 0)) goto cleanup;
-                }
-            }
-        }
-        type = type->tp_base;
-    }
-    /* If any fields written, overwrite trailing comma with }, otherwise append } */
-    if (MS_LIKELY(self->output_len != start_offset)) {
-        *(self->output_buffer_raw + self->output_len - 1) = '}';
-        status = 0;
-    }
-    else {
-        status = ms_write(self, "}", 1);
-    }
-cleanup:
-    Py_XDECREF(dict);
-    Py_LeaveRecursiveCall();
-    return status;
-}
-
-static int
 json_encode_struct_tag(EncoderState *self, PyObject *obj)
 {
     PyTypeObject *type = Py_TYPE(obj);
@@ -13376,20 +12702,6 @@ json_encode_uncommon(EncoderState *self, PyTypeObject *type, PyObject *obj) {
     }
     else if (PyAnySet_Check(obj)) {
         return json_encode_set(self, obj);
-    }
-    else if (type->tp_dict != NULL) {
-        PyObject *fields = PyObject_GetAttr(obj, self->mod->str___dataclass_fields__);
-        if (fields != NULL) {
-            int status = json_encode_dataclass(self, obj, fields);
-            Py_DECREF(fields);
-            return status;
-        }
-        else {
-            PyErr_Clear();
-        }
-        if (PyDict_Contains(type->tp_dict, self->mod->str___attrs_attrs__)) {
-            return json_encode_object(self, obj);
-        }
     }
 
     if (self->enc_hook != NULL) {
@@ -14835,55 +14147,6 @@ error:
 }
 
 static PyObject *
-mpack_decode_dataclass(
-    DecoderState *self, Py_ssize_t size, TypeNode *type, PathNode *path
-) {
-    if (Py_EnterRecursiveCall(" while deserializing an object")) return NULL;
-
-    DataclassInfo *info = TypeNode_get_dataclass_info(type);
-
-    PyTypeObject *dataclass_type = (PyTypeObject *)(info->class);
-    PyObject *out = dataclass_type->tp_alloc(dataclass_type, 0);
-    if (out == NULL) goto error;
-    if (info->pre_init != NULL) {
-        PyObject *res = CALL_ONE_ARG(info->pre_init, out);
-        if (res == NULL) goto error;
-        Py_DECREF(res);
-    }
-
-    Py_ssize_t pos = 0;
-    for (Py_ssize_t i = 0; i < size; i++) {
-        char *key;
-        PathNode key_path = {path, PATH_KEY, NULL};
-        Py_ssize_t key_size = mpack_decode_cstr(self, &key, &key_path);
-        if (MS_UNLIKELY(key_size < 0)) goto error;
-
-        TypeNode *field_type;
-        PyObject *field = DataclassInfo_lookup_key(info, key, key_size, &field_type, &pos);
-        if (field != NULL) {
-            PathNode field_path = {path, PATH_STR, field};
-            PyObject *val = mpack_decode(self, field_type, &field_path, false);
-            if (val == NULL) goto error;
-            int status = PyObject_GenericSetAttr(out, field, val);
-            Py_DECREF(val);
-            if (status < 0) goto error;
-        }
-        else {
-            /* Unknown field, skip */
-            if (mpack_skip(self) < 0) goto error;
-        }
-    }
-    if (DataclassInfo_post_decode(info, out, path) < 0) goto error;
-
-    Py_LeaveRecursiveCall();
-    return out;
-error:
-    Py_LeaveRecursiveCall();
-    Py_XDECREF(out);
-    return NULL;
-}
-
-static PyObject *
 mpack_decode_struct_map(
     DecoderState *self, Py_ssize_t size,
     StructInfo *info, PathNode *path, bool is_key
@@ -14998,9 +14261,6 @@ mpack_decode_map(
     }
     else if (type->types & MS_TYPE_TYPEDDICT) {
         return mpack_decode_typeddict(self, size, type, path);
-    }
-    else if (type->types & MS_TYPE_DATACLASS) {
-        return mpack_decode_dataclass(self, size, type, path);
     }
     else if (type->types & (MS_TYPE_DICT | MS_TYPE_ANY)) {
         if (MS_UNLIKELY(!ms_passes_map_constraints(size, type, path))) {
@@ -17331,100 +16591,6 @@ error:
 }
 
 static PyObject *
-json_decode_dataclass(
-    JSONDecoderState *self, TypeNode *type, PathNode *path
-) {
-    PyObject *out;
-    unsigned char c;
-    char *key = NULL;
-    bool first = true;
-    Py_ssize_t key_size, pos = 0;
-    DataclassInfo *info = TypeNode_get_dataclass_info(type);
-
-    if (Py_EnterRecursiveCall(" while deserializing an object")) return NULL;
-
-    PyTypeObject *dataclass_type = (PyTypeObject *)(info->class);
-    out = dataclass_type->tp_alloc(dataclass_type, 0);
-    if (out == NULL) goto error;
-    if (info->pre_init != NULL) {
-        PyObject *res = CALL_ONE_ARG(info->pre_init, out);
-        if (res == NULL) goto error;
-        Py_DECREF(res);
-    }
-
-    self->input_pos++; /* Skip '{' */
-
-    while (true) {
-        /* Parse '}' or ',', then peek the next character */
-        if (MS_UNLIKELY(!json_peek_skip_ws(self, &c))) goto error;
-        if (c == '}') {
-            self->input_pos++;
-            break;
-        }
-        else if (c == ',' && !first) {
-            self->input_pos++;
-            if (MS_UNLIKELY(!json_peek_skip_ws(self, &c))) goto error;
-        }
-        else if (first) {
-            /* Only the first item doesn't need a comma delimiter */
-            first = false;
-        }
-        else {
-            json_err_invalid(self, "expected ',' or '}'");
-            goto error;
-        }
-
-        /* Parse a string key */
-        if (c == '"') {
-            bool is_ascii = true;
-            key_size = json_decode_string_view(self, &key, &is_ascii);
-            if (key_size < 0) goto error;
-        }
-        else if (c == '}') {
-            json_err_invalid(self, "trailing comma in object");
-            goto error;
-        }
-        else {
-            json_err_invalid(self, "object keys must be strings");
-            goto error;
-        }
-
-        /* Parse colon */
-        if (MS_UNLIKELY(!json_peek_skip_ws(self, &c))) goto error;
-        if (c != ':') {
-            json_err_invalid(self, "expected ':'");
-            goto error;
-        }
-        self->input_pos++;
-
-        /* Parse value */
-        TypeNode *field_type;
-        PyObject *field = DataclassInfo_lookup_key(info, key, key_size, &field_type, &pos);
-
-        if (field != NULL) {
-            PathNode field_path = {path, PATH_STR, field};
-            PyObject *val = json_decode(self, field_type, &field_path);
-            if (val == NULL) goto error;
-            int status = PyObject_GenericSetAttr(out, field, val);
-            Py_DECREF(val);
-            if (status < 0) goto error;
-        }
-        else {
-            /* Skip unknown fields */
-            if (json_skip(self) < 0) goto error;
-        }
-    }
-    if (DataclassInfo_post_decode(info, out, path) < 0) goto error;
-
-    Py_LeaveRecursiveCall();
-    return out;
-error:
-    Py_LeaveRecursiveCall();
-    Py_XDECREF(out);
-    return NULL;
-}
-
-static PyObject *
 json_decode_struct_map_inner(
     JSONDecoderState *self, StructInfo *info, PathNode *path,
     Py_ssize_t starting_index
@@ -17632,9 +16798,6 @@ json_decode_object(
     }
     else if (type->types & MS_TYPE_TYPEDDICT) {
         return json_decode_typeddict(self, type, path);
-    }
-    else if (type->types & MS_TYPE_DATACLASS) {
-        return json_decode_dataclass(self, type, path);
     }
     else if (type->types & MS_TYPE_STRUCT) {
         return json_decode_struct_map(self, type, path);
@@ -18800,116 +17963,6 @@ cleanup:
 }
 
 static PyObject *
-to_builtins_dataclass(ToBuiltinsState *self, PyObject *obj, PyObject *fields)
-{
-    if (Py_EnterRecursiveCall(" while serializing an object")) return NULL;
-
-    bool ok = false;
-    PyObject *out = NULL;
-    DataclassIter iter;
-    if (!dataclass_iter_setup(&iter, obj, fields)) goto cleanup;
-
-    out = PyDict_New();
-    if (out == NULL) goto cleanup;
-
-    PyObject *field, *val;
-    while (dataclass_iter_next(&iter, &field, &val)) {
-        PyObject *val2 = to_builtins(self, val, false);
-        int status = (
-            (val2 == NULL) ? -1 : PyDict_SetItem(out, field, val2)
-        );
-        Py_DECREF(val);
-        Py_XDECREF(val2);
-        if (status < 0) goto cleanup;
-    }
-    ok = true;
-
-cleanup:
-    Py_LeaveRecursiveCall();
-    dataclass_iter_cleanup(&iter);
-    if (!ok) {
-        Py_XDECREF(out);
-        return NULL;
-    }
-    return out;
-}
-
-static PyObject*
-to_builtins_object(ToBuiltinsState *self, PyObject *obj) {
-    bool ok = false;
-    PyObject *dict = NULL, *out = NULL;
-
-    if (Py_EnterRecursiveCall(" while serializing an object")) return NULL;
-
-    out = PyDict_New();
-    if (out == NULL) goto cleanup;
-
-    /* First encode everything in `__dict__` */
-    dict = PyObject_GenericGetDict(obj, NULL);
-    if (MS_UNLIKELY(dict == NULL)) {
-        PyErr_Clear();
-    }
-    else {
-        PyObject *key, *val;
-        Py_ssize_t pos = 0;
-        while (PyDict_Next(dict, &pos, &key, &val)) {
-            if (MS_LIKELY(PyUnicode_CheckExact(key))) {
-                Py_ssize_t key_len;
-                if (MS_UNLIKELY(val == UNSET)) continue;
-                const char* key_buf = unicode_str_and_size(key, &key_len);
-                if (MS_UNLIKELY(key_buf == NULL)) goto cleanup;
-                if (MS_UNLIKELY(*key_buf == '_')) continue;
-
-                PyObject *val2 = to_builtins(self, val, false);
-                if (val2 == NULL) goto cleanup;
-                int status = PyDict_SetItem(out, key, val2);
-                Py_DECREF(val2);
-                if (status < 0) goto cleanup;
-            }
-        }
-    }
-    /* Then encode everything in slots */
-    PyTypeObject *type = Py_TYPE(obj);
-    while (type != NULL) {
-        Py_ssize_t n = Py_SIZE(type);
-        if (n) {
-            PyMemberDef *mp = MS_PyHeapType_GET_MEMBERS((PyHeapTypeObject *)type);
-            for (Py_ssize_t i = 0; i < n; i++, mp++) {
-                if (MS_LIKELY(mp->type == T_OBJECT_EX && !(mp->flags & READONLY))) {
-                    char *addr = (char *)obj + mp->offset;
-                    PyObject *val = *(PyObject **)addr;
-                    if (MS_UNLIKELY(val == UNSET)) continue;
-                    if (MS_UNLIKELY(val == NULL)) continue;
-                    if (MS_UNLIKELY(*mp->name == '_')) continue;
-
-                    PyObject *key = PyUnicode_InternFromString(mp->name);
-                    if (key == NULL) goto cleanup;
-
-                    int status = -1;
-                    PyObject *val2 = to_builtins(self, val, false);
-                    if (val2 != NULL) {
-                        status = PyDict_SetItem(out, key, val2);
-                        Py_DECREF(val2);
-                    }
-                    Py_DECREF(key);
-                    if (status < 0) goto cleanup;
-                }
-            }
-        }
-        type = type->tp_base;
-    }
-    ok = true;
-
-cleanup:
-    Py_XDECREF(dict);
-    Py_LeaveRecursiveCall();
-    if (!ok) {
-        Py_CLEAR(out);
-    }
-    return out;
-}
-
-static PyObject *
 to_builtins(ToBuiltinsState *self, PyObject *obj, bool is_key) {
     PyTypeObject *type = Py_TYPE(obj);
 
@@ -18987,20 +18040,6 @@ to_builtins(ToBuiltinsState *self, PyObject *obj, bool is_key) {
     }
     else if (PyAnySet_Check(obj)) {
         return to_builtins_set(self, obj, is_key);
-    }
-    else if (type->tp_dict != NULL) {
-        PyObject *fields = PyObject_GetAttr(obj, self->mod->str___dataclass_fields__);
-        if (fields != NULL) {
-            PyObject *out = to_builtins_dataclass(self, obj, fields);
-            Py_DECREF(fields);
-            return out;
-        }
-        else {
-            PyErr_Clear();
-        }
-        if (PyDict_Contains(type->tp_dict, self->mod->str___attrs_attrs__)) {
-            return to_builtins_object(self, obj);
-        }
     }
 
     if (self->builtin_types_seq != NULL) {
@@ -20191,53 +19230,6 @@ error:
 }
 
 static PyObject *
-convert_dict_to_dataclass(
-    ConvertState *self, PyObject *obj, TypeNode *type, PathNode *path
-) {
-    if (Py_EnterRecursiveCall(" while deserializing an object")) return NULL;
-
-    DataclassInfo *info = TypeNode_get_dataclass_info(type);
-
-    PyTypeObject *dataclass_type = (PyTypeObject *)(info->class);
-    PyObject *out = dataclass_type->tp_alloc(dataclass_type, 0);
-    if (out == NULL) goto error;
-    if (info->pre_init != NULL) {
-        PyObject *res = CALL_ONE_ARG(info->pre_init, out);
-        if (res == NULL) goto error;
-        Py_DECREF(res);
-    }
-
-    Py_ssize_t pos = 0, pos_obj = 0;
-    PyObject *key_obj = NULL, *val_obj = NULL;
-    while (PyDict_Next(obj, &pos_obj, &key_obj, &val_obj)) {
-        if (!convert_is_str_key(key_obj, path)) goto error;
-        Py_ssize_t key_size;
-        const char *key = unicode_str_and_size(key_obj, &key_size);
-        if (MS_UNLIKELY(key == NULL)) goto error;
-
-        TypeNode *field_type;
-        PyObject *field = DataclassInfo_lookup_key(
-            info, key, key_size, &field_type, &pos
-        );
-        if (field != NULL) {
-            PathNode field_path = {path, PATH_STR, field};
-            PyObject *val = convert(self, val_obj, field_type, &field_path);
-            if (val == NULL) goto error;
-            int status = PyObject_GenericSetAttr(out, field, val);
-            Py_DECREF(val);
-            if (status < 0) goto error;
-        }
-    }
-    if (DataclassInfo_post_decode(info, out, path) < 0) goto error;
-    Py_LeaveRecursiveCall();
-    return out;
-error:
-    Py_LeaveRecursiveCall();
-    Py_XDECREF(out);
-    return NULL;
-}
-
-static PyObject *
 convert_dict(
     ConvertState *self, PyObject *obj, TypeNode *type, PathNode *path
 ) {
@@ -20253,9 +19245,6 @@ convert_dict(
     }
     else if (type->types & MS_TYPE_TYPEDDICT) {
         return convert_dict_to_typeddict(self, obj, type, path);
-    }
-    else if (type->types & MS_TYPE_DATACLASS) {
-        return convert_dict_to_dataclass(self, obj, type, path);
     }
     return ms_validation_error("object", type, path);
 }
@@ -20358,78 +19347,6 @@ convert_object_to_struct_union(
     return NULL;
 }
 
-static PyObject *
-convert_object_to_dataclass(
-    ConvertState *self, PyObject *obj, TypeNode *type, PathNode *path,
-    PyObject* (*getter)(PyObject *, PyObject *)
-) {
-    DataclassInfo *info = TypeNode_get_dataclass_info(type);
-
-    Py_ssize_t nfields = Py_SIZE(info);
-    Py_ssize_t ndefaults = PyTuple_GET_SIZE(info->defaults);
-
-    if (Py_EnterRecursiveCall(" while deserializing an object")) return NULL;
-
-    PyTypeObject *dataclass_type = (PyTypeObject *)(info->class);
-    PyObject *out = dataclass_type->tp_alloc(dataclass_type, 0);
-    if (out == NULL) goto error;
-    if (info->pre_init != NULL) {
-        PyObject *res = CALL_ONE_ARG(info->pre_init, out);
-        if (res == NULL) goto error;
-        Py_DECREF(res);
-    }
-
-    for (Py_ssize_t i = 0; i < nfields; i++) {
-        PyObject *field = info->fields[i].key;
-        PyObject *attr = getter(obj, field);
-        PyObject *val;
-        if (attr == NULL) {
-            PyErr_Clear();
-            if (MS_LIKELY(i >= (nfields - ndefaults))) {
-                PyObject *default_val = PyTuple_GET_ITEM(
-                    info->defaults, i - (nfields - ndefaults)
-                );
-                bool is_factory = info->fields[i].type->types & MS_EXTRA_FLAG;
-                if (is_factory) {
-                    val = CALL_NO_ARGS(default_val);
-                }
-                else {
-                    Py_INCREF(default_val);
-                    val = default_val;
-                }
-            }
-            else {
-                ms_missing_required_field(field, path);
-                goto error;
-            }
-        }
-        else {
-            PathNode field_path = {path, PATH_STR, field};
-            val = convert(self, attr, info->fields[i].type, &field_path);
-            Py_DECREF(attr);
-        }
-        if (val == NULL) goto error;
-        int status = PyObject_GenericSetAttr(out, field, val);
-        Py_DECREF(val);
-        if (status < 0) goto error;
-    }
-    if (info->post_init != NULL) {
-        PyObject *res = CALL_ONE_ARG(info->post_init, out);
-        if (res == NULL) {
-            ms_maybe_wrap_validation_error(path);
-            goto error;
-        }
-        Py_DECREF(res);
-    }
-    Py_LeaveRecursiveCall();
-    return out;
-
-error:
-    Py_LeaveRecursiveCall();
-    Py_XDECREF(out);
-    return NULL;
-}
-
 static bool
 Lookup_union_contains_type(Lookup *lookup, PyTypeObject *cls) {
     if (Lookup_IsStrLookup(lookup)) {
@@ -20496,13 +19413,6 @@ convert_other(
             return obj;
         }
     }
-    else if (type->types & MS_TYPE_DATACLASS) {
-        DataclassInfo *info = TypeNode_get_dataclass_info(type);
-        if (pytype == (PyTypeObject *)(info->class)) {
-            Py_INCREF(obj);
-            return obj;
-        }
-    }
     else if (type->types & MS_TYPE_NAMEDTUPLE) {
         NamedTupleInfo *info = TypeNode_get_namedtuple_info(type);
         if (pytype == (PyTypeObject *)(info->class)) {
@@ -20545,9 +19455,6 @@ convert_other(
         }
         else if (matches_struct_union) {
             return convert_object_to_struct_union(self, obj, type, path, getter);
-        }
-        else if (type->types & MS_TYPE_DATACLASS) {
-            return convert_object_to_dataclass(self, obj, type, path, getter);
         }
     }
 
@@ -20648,10 +19555,10 @@ PyDoc_STRVAR(msgspec_convert__doc__,
 "    Setting ``strict=False`` implies ``str_keys=True, builtin_types=None``.\n"
 "    Default is True.\n"
 "from_attributes: bool, optional\n"
-"    If True, input objects may be coerced to ``Struct``/``dataclass``/``attrs``\n"
-"    types by extracting attributes from the input matching fields in the output\n"
-"    type. One use case is converting database query results (ORM or otherwise)\n"
-"    to msgspec structured types. Default is False.\n"
+"    If True, input objects may be coerced to ``Struct`` types by extracting \n"
+"    attributes from the input matching fields in the output type. One use case \n"
+"    is converting database query results (ORM or otherwise) to msgspec \n"
+"    structured types. Default is False.\n"
 "dec_hook: callable, optional\n"
 "    An optional callback for handling decoding custom types. Should have the\n"
 "    signature ``dec_hook(type: Type, obj: Any) -> Any``, where ``type`` is the\n"
@@ -20840,7 +19747,6 @@ msgspec_clear(PyObject *m)
     Py_CLEAR(st->str__fields);
     Py_CLEAR(st->str__field_defaults);
     Py_CLEAR(st->str___post_init__);
-    Py_CLEAR(st->str___dataclass_fields__);
     Py_CLEAR(st->str___attrs_attrs__);
     Py_CLEAR(st->str___supertype__);
     Py_CLEAR(st->str___bound__);
@@ -20863,7 +19769,6 @@ msgspec_clear(PyObject *m)
     Py_CLEAR(st->get_type_hints);
     Py_CLEAR(st->get_class_annotations);
     Py_CLEAR(st->get_typeddict_info);
-    Py_CLEAR(st->get_dataclass_info);
     Py_CLEAR(st->rebuild);
 #if PY_VERSION_HEX >= 0x030a00f0
     Py_CLEAR(st->types_uniontype);
@@ -20930,7 +19835,6 @@ msgspec_traverse(PyObject *m, visitproc visit, void *arg)
     Py_VISIT(st->get_type_hints);
     Py_VISIT(st->get_class_annotations);
     Py_VISIT(st->get_typeddict_info);
-    Py_VISIT(st->get_dataclass_info);
     Py_VISIT(st->rebuild);
 #if PY_VERSION_HEX >= 0x030a00f0
     Py_VISIT(st->types_uniontype);
@@ -20980,8 +19884,6 @@ PyInit__core(void)
     if (PyType_Ready(&LiteralInfo_Type) < 0)
         return NULL;
     if (PyType_Ready(&TypedDictInfo_Type) < 0)
-        return NULL;
-    if (PyType_Ready(&DataclassInfo_Type) < 0)
         return NULL;
     if (PyType_Ready(&NamedTupleInfo_Type) < 0)
         return NULL;
@@ -21137,7 +20039,6 @@ PyInit__core(void)
     SET_REF(get_type_hints, "get_type_hints");
     SET_REF(get_class_annotations, "get_class_annotations");
     SET_REF(get_typeddict_info, "get_typeddict_info");
-    SET_REF(get_dataclass_info, "get_dataclass_info");
     SET_REF(typing_annotated_alias, "_AnnotatedAlias");
     SET_REF(rebuild, "rebuild");
     Py_DECREF(temp_module);
@@ -21221,7 +20122,6 @@ PyInit__core(void)
     CACHED_STRING(str__fields, "_fields");
     CACHED_STRING(str__field_defaults, "_field_defaults");
     CACHED_STRING(str___post_init__, "__post_init__");
-    CACHED_STRING(str___dataclass_fields__, "__dataclass_fields__");
     CACHED_STRING(str___attrs_attrs__, "__attrs_attrs__");
     CACHED_STRING(str___supertype__, "__supertype__");
     CACHED_STRING(str___bound__, "__bound__");

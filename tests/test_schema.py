@@ -686,110 +686,6 @@ def test_generic_typeddict():
     }
 
 
-@pytest.mark.parametrize("module", ["dataclasses", "attrs"])
-def test_dataclass_or_attrs(module):
-    m = pytest.importorskip(module)
-    if module == "attrs":
-        decorator = m.define
-        factory_default = m.field(factory=dict)
-    else:
-        decorator = m.dataclass
-        factory_default = m.field(default_factory=dict)
-
-    @decorator
-    class Point:
-        x: int
-        y: int
-
-    @decorator
-    class Polygon:
-        """An example docstring"""
-
-        vertices: List[Point]
-        name: Union[str, None] = None
-        metadata: Dict[str, str] = factory_default
-
-    assert msgspec.json.schema(Polygon) == {
-        "$ref": "#/$defs/Polygon",
-        "$defs": {
-            "Polygon": {
-                "title": "Polygon",
-                "description": "An example docstring",
-                "type": "object",
-                "properties": {
-                    "vertices": {
-                        "type": "array",
-                        "items": {"$ref": "#/$defs/Point"},
-                    },
-                    "name": {
-                        "anyOf": [{"type": "string"}, {"type": "null"}],
-                        "default": None,
-                    },
-                    "metadata": {
-                        "type": "object",
-                        "additionalProperties": {"type": "string"},
-                    },
-                },
-                "required": ["vertices"],
-            },
-            "Point": {
-                "title": "Point",
-                "type": "object",
-                "properties": {
-                    "x": {"type": "integer"},
-                    "y": {"type": "integer"},
-                },
-                "required": ["x", "y"],
-            },
-        },
-    }
-
-
-@pytest.mark.parametrize("module", ["dataclasses", "attrs"])
-def test_generic_dataclass_or_attrs(module):
-    m = pytest.importorskip(module)
-    decorator = m.define if module == "attrs" else m.dataclass
-
-    @decorator
-    class Ex(Generic[T]):
-        """An example docstring"""
-
-        x: T
-        y: List[T]
-
-    assert msgspec.json.schema(Ex) == {
-        "$ref": "#/$defs/Ex",
-        "$defs": {
-            "Ex": {
-                "title": "Ex",
-                "description": "An example docstring",
-                "type": "object",
-                "properties": {
-                    "x": {},
-                    "y": {"type": "array"},
-                },
-                "required": ["x", "y"],
-            },
-        },
-    }
-
-    assert msgspec.json.schema(Ex[int]) == {
-        "$ref": "#/$defs/Ex_int_",
-        "$defs": {
-            "Ex_int_": {
-                "title": "Ex[int]",
-                "description": "An example docstring",
-                "type": "object",
-                "properties": {
-                    "x": {"type": "integer"},
-                    "y": {"type": "array", "items": {"type": "integer"}},
-                },
-                "required": ["x", "y"],
-            },
-        },
-    }
-
-
 @pytest.mark.parametrize("use_union_operator", [False, True])
 def test_union(use_union_operator):
     class Example(msgspec.Struct):
@@ -1171,19 +1067,14 @@ def test_schema_components_collects_subtypes():
     class ExTuple(NamedTuple):
         d: List[ExDict]
 
-    @dataclass
-    class ExDataclass:
-        e: List[ExTuple]
-
-    (s,), components = msgspec.json.schema_components([Dict[str, ExDataclass]])
+    (s,), components = msgspec.json.schema_components([Dict[str, ExTuple]])
 
     r1 = {"$ref": "#/$defs/ExEnum"}
     r2 = {"$ref": "#/$defs/ExStruct"}
     r3 = {"$ref": "#/$defs/ExDict"}
     r4 = {"$ref": "#/$defs/ExTuple"}
-    r5 = {"$ref": "#/$defs/ExDataclass"}
 
-    assert s == {"type": "object", "additionalProperties": r5}
+    assert s == {"type": "object", "additionalProperties": r4}
     assert components == {
         "ExEnum": {"enum": [1], "title": "ExEnum"},
         "ExStruct": {
@@ -1211,12 +1102,6 @@ def test_schema_components_collects_subtypes():
             "prefixItems": [{"items": r3, "type": "array"}],
             "maxItems": 1,
             "minItems": 1,
-        },
-        "ExDataclass": {
-            "title": "ExDataclass",
-            "type": "object",
-            "properties": {"e": {"items": r4, "type": "array"}},
-            "required": ["e"],
         },
     }
 
