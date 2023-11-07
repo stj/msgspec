@@ -5,7 +5,6 @@ import enum
 import os
 import sys
 import uuid
-import weakref
 from dataclasses import dataclass
 from typing import Any, NamedTuple, Union
 
@@ -74,7 +73,7 @@ class TestToBuiltins:
     def test_to_builtins_enc_hook_explicit_none(self):
         assert to_builtins(1, enc_hook=None) == 1
 
-    @pytest.mark.parametrize("case", [1, 2, 3, 4, 5])
+    @pytest.mark.parametrize("case", [1, 2, 3, 4])
     def test_to_builtins_recursive(self, case):
         if case == 1:
             o = []
@@ -88,14 +87,6 @@ class TestToBuiltins:
         elif case == 4:
 
             class Box(Struct):
-                a: "Box"
-
-            o = Box(None)
-            o.a = o
-        elif case == 5:
-
-            @dataclass
-            class Box:
                 a: "Box"
 
             o = Box(None)
@@ -358,122 +349,11 @@ class TestToBuiltins:
         with pytest.raises(TypeError, match="Encoding objects of type Bad"):
             to_builtins(msg)
 
-    @pytest.mark.parametrize("slots", slots_params)
-    def test_dataclass(self, slots):
-        @dataclass(**({"slots": True} if slots else {}))
-        class Ex:
-            x: int
-            y: FruitInt
-
-        msg = Ex(1, FruitInt.APPLE)
-        assert to_builtins(msg) == {"x": 1, "y": -1}
-
-    @pytest.mark.parametrize("slots", slots_params)
-    def test_dataclass_missing_fields(self, slots):
-        @dataclass(**({"slots": True} if slots else {}))
-        class Ex:
-            x: int
-            y: int
-            z: int
-
-        x = Ex(1, 2, 3)
-        sol = {"x": 1, "y": 2, "z": 3}
-        for key in "xyz":
-            delattr(x, key)
-            del sol[key]
-            assert to_builtins(x) == sol
-
-    @pytest.mark.parametrize("slots_base", slots_params)
-    @pytest.mark.parametrize("slots", slots_params)
-    def test_dataclass_subclasses(self, slots_base, slots):
-        @dataclass(**({"slots": True} if slots_base else {}))
-        class Base:
-            x: int
-            y: int
-
-        @dataclass(**({"slots": True} if slots else {}))
-        class Ex(Base):
-            y: int
-            z: int
-
-        x = Ex(1, 2, 3)
-        res = to_builtins(x)
-        assert res == {"x": 1, "y": 2, "z": 3}
-
-        # Missing attribute ignored
-        del x.y
-        res = to_builtins(x)
-        assert res == {"x": 1, "z": 3}
-
-    @py311_plus
-    def test_dataclass_weakref_slot(self):
-        @dataclass(slots=True, weakref_slot=True)
-        class Ex:
-            x: int
-            y: int
-
-        x = Ex(1, 2)
-        ref = weakref.ref(x)  # noqa
-        res = to_builtins(x)
-        assert res == {"x": 1, "y": 2}
-
-    @pytest.mark.parametrize("slots", slots_params)
-    def test_dataclass_unsupported_value(self, slots):
-        @dataclass(**({"slots": True} if slots else {}))
-        class Ex:
-            x: Any
-            y: Any
-
-        msg = Ex(1, Bad())
-        with pytest.raises(TypeError, match="Encoding objects of type Bad"):
-            to_builtins(msg)
-
-    @pytest.mark.parametrize("slots", [True, False])
-    def test_attrs(self, slots):
-        attrs = pytest.importorskip("attrs")
-
-        @attrs.define(slots=slots)
-        class Ex:
-            x: int
-            y: FruitInt
-
-        msg = Ex(1, FruitInt.APPLE)
-        assert to_builtins(msg) == {"x": 1, "y": -1}
-
-    @pytest.mark.parametrize("slots", [True, False])
-    def test_attrs_skip_leading_underscore(self, slots):
-        attrs = pytest.importorskip("attrs")
-
-        @attrs.define(slots=slots)
-        class Ex:
-            x: int
-            y: int
-            _z: int
-
-        x = Ex(1, 2, 3)
-        res = to_builtins(x)
-        assert res == {"x": 1, "y": 2}
-
-    @pytest.mark.parametrize("kind", ["struct", "dataclass", "attrs"])
+    @pytest.mark.parametrize("kind", ["struct"])
     def test_unset_fields(self, kind):
         if kind == "struct":
 
             class Ex(Struct):
-                x: Union[int, UnsetType]
-                y: Union[int, UnsetType]
-
-        elif kind == "dataclass":
-
-            @dataclass
-            class Ex:
-                x: Union[int, UnsetType]
-                y: Union[int, UnsetType]
-
-        elif kind == "attrs":
-            attrs = pytest.importorskip("attrs")
-
-            @attrs.define
-            class Ex:
                 x: Union[int, UnsetType]
                 y: Union[int, UnsetType]
 

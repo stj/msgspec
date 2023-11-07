@@ -39,7 +39,6 @@ Most combinations of the following types are supported (with a few restrictions)
 - `enum.StrEnum` types
 - `enum.Flag` types
 - `enum.IntFlag` types
-- `dataclasses.dataclass` types
 
 **Typing module types**
 
@@ -64,9 +63,6 @@ Most combinations of the following types are supported (with a few restrictions)
 - `collections.abc.Mapping` / `typing.Mapping`
 - `collections.abc.MutableMapping` / `typing.MutableMapping`
 
-**Third-Party Libraries**
-
-- attrs_ types
 
 Additional types may be supported through :doc:`extensions <extending>`.
 
@@ -784,117 +780,6 @@ already using them elsewhere, or if you have downstream code that requires a
       File "<stdin>", line 1, in <module>
     msgspec.ValidationError: Expected `int`, got `str` - at `$.age`
 
-``dataclasses``
----------------
-
-`dataclasses` map to objects/maps in all protocols.
-
-During decoding, any extra fields are ignored. An error is raised if a field's
-type doesn't match or if any required fields are missing.
-
-If a ``__post_init__`` method is defined on the dataclass, it is called after
-the object is decoded. Note that `"Init-only parameters"
-<https://docs.python.org/3/library/dataclasses.html#init-only-variables>`__
-(i.e. ``InitVar`` fields) are _not_ supported.
-
-When possible we recommend using `msgspec.Struct` instead of dataclasses for
-specifying schemas - :doc:`structs` are faster, more ergonomic, and support
-additional features.
-
-.. code-block:: python
-
-    >>> from dataclasses import dataclass
-
-    >>> @dataclass
-    ... class Person:
-    ...     name: str
-    ...     age: int
-
-    >>> carol = Person(name="carol", age=32)
-
-    >>> msg = msgspec.json.encode(carol)
-
-    >>> msgspec.json.decode(msg, type=Person)
-    Person(name='carol', age=32)
-
-    >>> wrong_type = b'{"name": "doug", "age": "thirty"}'
-
-    >>> msgspec.json.decode(wrong_type, type=Person)
-    Traceback (most recent call last):
-      File "<stdin>", line 1, in <module>
-    msgspec.ValidationError: Expected `int`, got `str` - at `$.age`
-
-Other types that duck-type as ``dataclasses`` (for example
-`edgedb Objects <https://www.edgedb.com/docs/clients/python/api/types#objects>`__ or
-`pydantic dataclasses <https://docs.pydantic.dev/latest/usage/dataclasses/>`__)
-are also supported.
-
-.. code-block:: python
-
-    >>> import edgedb
-
-    >>> client = edgedb.create_client()
-
-    >>> alice = client.query_single(
-    ...     "SELECT User {name, dob} FILTER .name = <str>$name LIMIT 1",
-    ...     name="Alice"
-    ... )
-
-    >>> alice
-    Object{name := 'Alice', dob := datetime.date(1984, 3, 1)}
-
-    >>> msgspec.json.encode(alice)
-    b'{"id":"a6b951cc-2d00-11ee-91aa-b3f17e9898ce","name":"Alice","dob":"1984-03-01"}'
-
-For a more complete example using EdgeDB, see :doc:`examples/edgedb`.
-
-``attrs``
----------
-
-attrs_ types map to objects/maps in all protocols.
-
-During encoding, all attributes without a leading underscore (``"_"``) are
-encoded.
-
-During decoding, any extra fields are ignored. An error is raised if a field's
-type doesn't match or if any required fields are missing.
-
-If the ``__attrs_pre_init__`` or ``__attrs_post_init__`` methods are defined on
-the class, they are called as part of the decoding process. Likewise, if a
-class makes use of attrs' `validators
-<https://www.attrs.org/en/stable/examples.html#validators>`__, the validators
-will be called, and a `msgspec.ValidationError` raised on error. Note that
-attrs' `converters
-<https://www.attrs.org/en/stable/examples.html#conversion>`__ are not currently
-supported.
-
-When possible we recommend using `msgspec.Struct` instead of attrs_ types for
-specifying schemas - :doc:`structs` are faster, more ergonomic, and support
-additional features.
-
-.. code-block:: python
-
-    >>> from attrs import define
-
-    >>> @define
-    ... class Person:
-    ...     name: str
-    ...     age: int
-
-    >>> carol = Person(name="carol", age=32)
-
-    >>> msg = msgspec.json.encode(carol)
-
-    >>> msgspec.json.decode(msg, type=Person)
-    Person(name='carol', age=32)
-
-    >>> wrong_type = b'{"name": "doug", "age": "thirty"}'
-
-    >>> msgspec.json.decode(wrong_type, type=Person)
-    Traceback (most recent call last):
-      File "<stdin>", line 1, in <module>
-    msgspec.ValidationError: Expected `int`, got `str` - at `$.age`
-
 ``Struct``
 ----------
 
@@ -1028,9 +913,9 @@ determine whether a field was left unset, or explicitly set to ``None``
     >>> json.decode(b'{"x": 1, "y": 2}', type=Example)  # y is 2
     Example(x=1, y=2)
 
-``UNSET`` fields are supported for `msgspec.Struct`, `dataclasses`, and attrs_
-types. It is an error to use `msgspec.UNSET` or `msgspec.UnsetType` anywhere
-other than a field for one of these types.
+``UNSET`` fields are supported for `msgspec.Struct` types. It is an error to
+use `msgspec.UNSET` or `msgspec.UnsetType` anywhere other than a field for
+one of these types.
 
 ``Enum`` / ``IntEnum`` / ``StrEnum``
 ------------------------------------
@@ -1177,8 +1062,6 @@ Generic Types
 based on any of the following types:
 
 - `msgspec.Struct`
-- `dataclasses`
-- `attrs`
 - `typing.TypedDict`
 - `typing.NamedTuple`
 

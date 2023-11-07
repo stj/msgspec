@@ -56,30 +56,6 @@ class C{n}:
     ]
 )
 
-attrs_template = """
-from attr import define
-
-@define(order=True)
-class C{n}:
-    a: int
-    b: int
-    c: int
-    d: int
-    e: int
-"""
-
-dataclasses_template = """
-from dataclasses import dataclass
-
-@dataclass(order=True)
-class C{n}:
-    a: int
-    b: int
-    c: int
-    d: int
-    e: int
-"""
-
 pydantic_template = """
 from pydantic import BaseModel
 
@@ -104,8 +80,6 @@ class C{n}(Struct, order=True):
 
 sources = {
     "standard classes": classes_template,
-    "attrs": attrs_template,
-    "dataclasses": dataclasses_template,
     "pydantic": pydantic_template,
     "msgspec": msgspec_template,
 }

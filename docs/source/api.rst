@@ -171,7 +171,6 @@ Inspect
 .. autoclass:: Field
 .. autoclass:: TypedDictType
 .. autoclass:: NamedTupleType
-.. autoclass:: DataclassType
 .. autoclass:: StructType
 
 

@@ -31,7 +31,6 @@ from ._utils import (  # type: ignore
     _CONCRETE_TYPES,
     _AnnotatedAlias,
     get_class_annotations as _get_class_annotations,
-    get_dataclass_info as _get_dataclass_info,
     get_typeddict_info as _get_typeddict_info,
 )
 
@@ -70,7 +69,6 @@ __all__ = (
     "Field",
     "TypedDictType",
     "NamedTupleType",
-    "DataclassType",
     "StructType",
 )
 
@@ -509,21 +507,6 @@ class NamedTupleType(Type):
     fields: Tuple[Field, ...]
 
 
-class DataclassType(Type):
-    """A type corresponding to a `dataclasses` or `attrs` type.
-
-    Parameters
-    ----------
-    cls: type
-        The corresponding dataclass type.
-    fields: Tuple[Field, ...]
-        A tuple of fields in the dataclass.
-    """
-
-    cls: type
-    fields: Tuple[Field, ...]
-
-
 class StructType(Type):
     """A type corresponding to a `msgspec.Struct` type.
 
@@ -661,14 +644,6 @@ def _is_struct(t):
 
 def _is_enum(t):
     return type(t) is enum.EnumMeta
-
-
-def _is_dataclass(t):
-    return hasattr(t, "__dataclass_fields__")
-
-
-def _is_attrs(t):
-    return hasattr(t, "__attrs_attrs__")
 
 
 def _is_typeddict(t):
@@ -929,39 +904,6 @@ class _Translator:
                 )
                 for name, field_type in sorted(hints.items())
             )
-            return out
-        elif _is_dataclass(t) or _is_attrs(t):
-            cls = t[args] if args else t
-            if cls in self.cache:
-                return self.cache[cls]
-            self.cache[cls] = out = DataclassType(cls, ())
-            _, info, defaults, _, _ = _get_dataclass_info(cls)
-            defaults = ((NODEFAULT,) * (len(info) - len(defaults))) + defaults
-            fields = []
-            for (name, typ, is_factory), default_obj in zip(info, defaults):
-                if default_obj is NODEFAULT:
-                    required = True
-                    default = default_factory = NODEFAULT
-                elif is_factory:
-                    required = False
-                    default = NODEFAULT
-                    default_factory = default_obj
-                else:
-                    required = False
-                    default = NODEFAULT if default_obj is UNSET else default_obj
-                    default_factory = NODEFAULT
-
-                fields.append(
-                    Field(
-                        name=name,
-                        encode_name=name,
-                        type=self.translate(typ),
-                        required=required,
-                        default=default,
-                        default_factory=default_factory,
-                    )
-                )
-            out.fields = tuple(fields)
             return out
         elif _is_namedtuple(t):
             cls = t[args] if args else t
