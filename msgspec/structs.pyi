@@ -7,6 +7,7 @@ S = TypeVar("S", bound=Struct)
 def replace(struct: S, /, **changes: Any) -> S: ...
 def asdict(struct: Struct) -> dict[str, Any]: ...
 def astuple(struct: Struct) -> tuple[Any, ...]: ...
+def force_setattr(struct: Struct, name: str, value: Any) -> None: ...
 
 class StructConfig:
     frozen: bool
@@ -19,6 +20,7 @@ class StructConfig:
     forbid_unknown_fields: bool
     weakref: bool
     dict: bool
+    cache_hash: bool
     tag: Union[str, int, None]
     tag_field: Union[str, None]
 

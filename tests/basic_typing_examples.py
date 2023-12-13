@@ -269,6 +269,15 @@ def check_struct_dict() -> None:
     reveal_type(t)  # assert "Test" in typ
 
 
+def check_struct_cache_hash() -> None:
+    class Test(msgspec.Struct, cache_hash=True):
+        x: int
+        y: str
+
+    t = Test(1, "foo")
+    reveal_type(t)  # assert "Test" in typ
+
+
 def check_struct_tag_tag_field() -> None:
     class Test1(msgspec.Struct, tag=None):
         pass
@@ -353,6 +362,7 @@ def check_struct_config() -> None:
     reveal_type(config.forbid_unknown_fields)  # assert "bool" in typ
     reveal_type(config.weakref)  # assert "bool" in typ
     reveal_type(config.dict)  # assert "bool" in typ
+    reveal_type(config.cache_hash)  # assert "bool" in typ
     reveal_type(config.tag)  # assert "str" in typ and "int" in typ
     reveal_type(config.tag_field)  # assert "str" in typ
 
@@ -406,6 +416,9 @@ def check_defstruct_config_options() -> None:
         kw_only=True,
         repr_omit_defaults=True,
         array_like=True,
+        dict=True,
+        weakref=True,
+        cache_hash=True,
         gc=False,
         tag="mytag",
         tag_field="mytagfield",
@@ -448,6 +461,15 @@ def check_astuple() -> None:
     o = msgspec.structs.astuple(x)
     reveal_type(o)  # assert "tuple" in typ
     reveal_type(o[0])  # assert "Any" in typ
+
+
+def check_force_setattr() -> None:
+    class Point(msgspec.Struct, frozen=True):
+        x: int
+        y: int
+
+    obj = Point(1, 2)
+    msgspec.structs.force_setattr(obj, "x", 3)
 
 
 def check_fields() -> None:
@@ -1003,20 +1025,27 @@ def check_consume_inspect_types() -> None:
 
 
 def check_json_schema() -> None:
-    o = msgspec.json.schema(List[int])
-    reveal_type(o)  # assert ("Dict" in typ or "dict" in typ)
+    o1 = msgspec.json.schema(List[int])
+    reveal_type(o1)  # assert ("Dict" in typ or "dict" in typ)
+
+    o2 = msgspec.json.schema(List[int], schema_hook=lambda t: {"type": "object"})
+    reveal_type(o2)  # assert ("Dict" in typ or "dict" in typ)
 
 
 def check_json_schema_components() -> None:
-    s, c = msgspec.json.schema_components([List[int]])
-    reveal_type(s)  # assert ("dict" in typ.lower()) and ("tuple" in typ.lower())
-    reveal_type(c)  # assert ("dict" in typ.lower())
+    s1, c1 = msgspec.json.schema_components([List[int]])
+    reveal_type(s1)  # assert ("dict" in typ.lower()) and ("tuple" in typ.lower())
+    reveal_type(c1)  # assert ("dict" in typ.lower())
 
+    s2, c2 = msgspec.json.schema_components([List[int]], ref_template="#/definitions/{name}")
+    reveal_type(s2)  # assert ("dict" in typ.lower()) and ("tuple" in typ.lower())
+    reveal_type(c2)  # assert ("dict" in typ.lower())
 
-def check_json_schema_components_full() -> None:
-    s, c = msgspec.json.schema_components([List[int]], ref_template="#/definitions/{name}")
-    reveal_type(s)  # assert ("dict" in typ.lower()) and ("tuple" in typ.lower())
-    reveal_type(c)  # assert ("dict" in typ.lower())
+    s3, c3 = msgspec.json.schema_components(
+        [List[int]], schema_hook=lambda t: {"type": "object"}
+    )
+    reveal_type(s3)  # assert ("dict" in typ.lower()) and ("tuple" in typ.lower())
+    reveal_type(c3)  # assert ("dict" in typ.lower())
 
 
 ##########################################################

@@ -15,6 +15,12 @@
 #include "ryu.h"
 #include "atof.h"
 
+/* Python version checks */
+#define PY39_PLUS  (PY_VERSION_HEX >= 0x03090000)
+#define PY310_PLUS (PY_VERSION_HEX >= 0x030a0000)
+#define PY311_PLUS (PY_VERSION_HEX >= 0x030b0000)
+#define PY312_PLUS (PY_VERSION_HEX >= 0x030c0000)
+
 /* Hint to the compiler not to store `x` in a register since it is likely to
  * change. Results in much higher performance on GCC, with smaller benefits on
  * clang */
@@ -36,18 +42,18 @@ ms_popcount(uint64_t i) {                            \
 }
 #endif
 
-#if PY_VERSION_HEX < 0x03090000
-#define CALL_ONE_ARG(f, a) PyObject_CallFunctionObjArgs(f, a, NULL)
-#define CALL_NO_ARGS(f) PyObject_CallFunctionObjArgs(f, NULL)
-#define CALL_METHOD_ONE_ARG(o, n, a) PyObject_CallMethodObjArgs(o, n, a, NULL)
-#define CALL_METHOD_NO_ARGS(o, n) PyObject_CallMethodObjArgs(o, n, NULL)
-#define SET_SIZE(obj, size) (((PyVarObject *)obj)->ob_size = size)
-#else
+#if PY39_PLUS
 #define CALL_ONE_ARG(f, a) PyObject_CallOneArg(f, a)
 #define CALL_NO_ARGS(f) PyObject_CallNoArgs(f)
 #define CALL_METHOD_ONE_ARG(o, n, a) PyObject_CallMethodOneArg(o, n, a)
 #define CALL_METHOD_NO_ARGS(o, n) PyObject_CallMethodNoArgs(o, n)
 #define SET_SIZE(obj, size) Py_SET_SIZE(obj, size)
+#else
+#define CALL_ONE_ARG(f, a) PyObject_CallFunctionObjArgs(f, a, NULL)
+#define CALL_NO_ARGS(f) PyObject_CallFunctionObjArgs(f, NULL)
+#define CALL_METHOD_ONE_ARG(o, n, a) PyObject_CallMethodObjArgs(o, n, a, NULL)
+#define CALL_METHOD_NO_ARGS(o, n) PyObject_CallMethodObjArgs(o, n, NULL)
+#define SET_SIZE(obj, size) (((PyVarObject *)obj)->ob_size = size)
 #endif
 
 #define DIV_ROUND_CLOSEST(n, d) ((((n) < 0) == ((d) < 0)) ? (((n) + (d)/2)/(d)) : (((n) - (d)/2)/(d)))
@@ -157,7 +163,7 @@ fast_long_extract_parts(PyObject *vv, bool *neg, uint64_t *scale) {
     uint64_t prev, x = 0;
     bool negative;
 
-#if PY_VERSION_HEX >= 0x030c0000
+#if PY312_PLUS
     /* CPython 3.12 changed int internal representation */
     int sign = 1 - (v->long_value.lv_tag & _PyLong_SIGN_MASK);
     negative = sign == -1;
@@ -383,6 +389,7 @@ typedef struct {
     PyObject *struct_lookup_cache;
     PyObject *str___weakref__;
     PyObject *str___dict__;
+    PyObject *str___msgspec_cached_hash__;
     PyObject *str__value2member_map_;
     PyObject *str___msgspec_cache__;
     PyObject *str__value_;
@@ -403,6 +410,9 @@ typedef struct {
     PyObject *str___post_init__;
     PyObject *str___attrs_attrs__;
     PyObject *str___supertype__;
+#if PY312_PLUS
+    PyObject *str___value__;
+#endif
     PyObject *str___bound__;
     PyObject *str___constraints__;
     PyObject *str_int;
@@ -424,8 +434,11 @@ typedef struct {
     PyObject *get_class_annotations;
     PyObject *get_typeddict_info;
     PyObject *rebuild;
-#if PY_VERSION_HEX >= 0x030a00f0
+#if PY310_PLUS
     PyObject *types_uniontype;
+#endif
+#if PY312_PLUS
+    PyObject *typing_typealiastype;
 #endif
     PyObject *astimezone;
     PyObject *re_compile;
@@ -1674,6 +1687,7 @@ PyDoc_STRVAR(Meta__doc__,
 "``Meta`` inline in a struct definition to restrict the ``name`` string field\n"
 "to a maximum length of 32 characters.\n"
 "\n"
+">>> import msgspec\n"
 ">>> from typing import Annotated\n"
 ">>> from msgspec import Struct, Meta\n"
 ">>> NonNegativeInt = Annotated[int, Meta(ge=0)]\n"
@@ -2118,7 +2132,7 @@ PyTypeObject NoDefault_Type = {
     .tp_basicsize = 0
 };
 
-#if PY_VERSION_HEX >= 0x030c0000
+#if PY312_PLUS
 PyObject _NoDefault_Object = {
     _PyObject_EXTRA_INIT
     { _Py_IMMORTAL_REFCNT },
@@ -2222,7 +2236,7 @@ PyTypeObject Unset_Type = {
     .tp_basicsize = 0
 };
 
-#if PY_VERSION_HEX >= 0x030c0000
+#if PY312_PLUS
 PyObject _Unset_Object = {
     _PyObject_EXTRA_INIT
     { _Py_IMMORTAL_REFCNT },
@@ -2668,6 +2682,7 @@ typedef struct {
     PyObject *match_args;
     PyObject *rename;
     PyObject *post_init;
+    Py_ssize_t hash_offset;  /* 0 for no caching, otherwise offset */
     int8_t frozen;
     int8_t order;
     int8_t eq;
@@ -3672,7 +3687,7 @@ error:
 
 static bool
 get_msgspec_cache(MsgspecState *mod, PyObject *obj, PyTypeObject *type, PyObject **out) {
-    PyObject *cached = PyObject_GetAttr(obj, mod->str___msgspec_cache__);
+    PyObject *cached = PyObject_GenericGetAttr(obj, mod->str___msgspec_cache__);
     if (cached != NULL) {
         if (Py_TYPE(cached) != type) {
             Py_DECREF(cached);
@@ -4410,6 +4425,21 @@ typenode_origin_args_metadata(
                         t = temp;
                         continue;
                     }
+                    /* Check for parametrized TypeAliasType if Python 3.12+ */
+                #if PY312_PLUS
+                    if (Py_TYPE(origin) == (PyTypeObject *)(state->mod->typing_typealiastype)) {
+                        PyObject *value = PyObject_GetAttr(origin, state->mod->str___value__);
+                        if (value == NULL) goto error;
+                        PyObject *temp = PyObject_GetItem(value, args);
+                        Py_DECREF(value);
+                        if (temp == NULL) goto error;
+                        Py_CLEAR(args);
+                        Py_CLEAR(origin);
+                        Py_DECREF(t);
+                        t = temp;
+                        continue;
+                    }
+                #endif
                 }
                 else {
                     /* Custom non-parametrized generics won't have __args__
@@ -4438,14 +4468,23 @@ typenode_origin_args_metadata(
                 t = supertype;
                 continue;
             }
-            else {
-                PyErr_Clear();
-                break;
+            PyErr_Clear();
+
+            /* Check for TypeAliasType if Python 3.12+ */
+        #if PY312_PLUS
+            if (Py_TYPE(t) == (PyTypeObject *)(state->mod->typing_typealiastype)) {
+                PyObject *value = PyObject_GetAttr(t, state->mod->str___value__);
+                if (value == NULL) goto error;
+                Py_DECREF(t);
+                t = value;
+                continue;
             }
+        #endif
+            break;
         }
     }
 
-    #if PY_VERSION_HEX >= 0x030a00f0
+    #if PY310_PLUS
     if (Py_TYPE(t) == (PyTypeObject *)(state->mod->types_uniontype)) {
         /* Handle types.UnionType unions (`int | float | ...`) */
         args = PyObject_GetAttr(t, state->mod->str___args__);
@@ -4633,6 +4672,10 @@ typenode_collect_type(TypeNodeCollectState *state, PyObject *obj) {
         }
     }
     else if (origin == state->mod->typing_union) {
+        if (Py_EnterRecursiveCall(" while analyzing a type")) {
+            out = -1;
+            goto done;
+        }
         for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(args); i++) {
             PyObject *arg = PyTuple_GET_ITEM(args, i);
             /* Ignore UnsetType in unions */
@@ -4640,6 +4683,7 @@ typenode_collect_type(TypeNodeCollectState *state, PyObject *obj) {
             out = typenode_collect_type(state, arg);
             if (out < 0) break;
         }
+        Py_LeaveRecursiveCall();
     }
     else if (origin == state->mod->typing_literal) {
         if (state->literals == NULL) {
@@ -4696,6 +4740,8 @@ TypeNode_Convert(PyObject *obj) {
     state.mod = msgspec_get_global_state();
     state.context = obj;
 
+    if (Py_EnterRecursiveCall(" while analyzing a type")) return NULL;
+
     /* Traverse `obj` to collect all type annotations at this level */
     if (typenode_collect_type(&state, obj) < 0) goto done;
     /* Handle structs in a second pass */
@@ -4708,6 +4754,7 @@ TypeNode_Convert(PyObject *obj) {
     out = typenode_from_collect_state(&state);
 done:
     typenode_collect_clear_state(&state);
+    Py_LeaveRecursiveCall();
     return out;
 }
 
@@ -5142,6 +5189,8 @@ typedef struct {
     bool already_has_weakref;
     int dict;
     bool already_has_dict;
+    int cache_hash;
+    Py_ssize_t hash_offset;
     bool has_non_struct_bases;
 } StructMetaInfo;
 
@@ -5210,6 +5259,11 @@ structmeta_collect_base(StructMetaInfo *info, MsgspecState *mod, PyObject *base)
     }
 
     StructMetaObject *st_type = (StructMetaObject *)base;
+
+    /* Check if a hash_cache slot already exists */
+    if (st_type->hash_offset != 0) {
+        info->hash_offset = st_type->hash_offset;
+    }
 
     /* Inherit config fields */
     if (st_type->struct_tag_field != NULL) {
@@ -5497,18 +5551,20 @@ structmeta_collect_fields(StructMetaInfo *info, MsgspecState *mod, bool kwonly) 
             goto error;
         }
 
-        if (PyUnicode_Compare(field, mod->str___weakref__) == 0) {
-            PyErr_SetString(
-                PyExc_TypeError, "Cannot have a struct field named '__weakref__'"
-            );
-            goto error;
+        PyObject *invalid_field_names[] = {
+            mod->str___weakref__, mod->str___dict__, mod->str___msgspec_cached_hash__
+        };
+        for (int i = 0; i < 3; i++) {
+            if (PyUnicode_Compare(field, invalid_field_names[i]) == 0) {
+                PyErr_Format(
+                    PyExc_TypeError,
+                    "Cannot have a struct field named %R",
+                    field
+                );
+                goto error;
+            }
         }
-        if (PyUnicode_Compare(field, mod->str___dict__) == 0) {
-            PyErr_SetString(
-                PyExc_TypeError, "Cannot have a struct field named '__dict__'"
-            );
-            goto error;
-        }
+
         int status = structmeta_is_classvar(info, mod, value, &module_ns);
         if (status == 1) continue;
         if (status == -1) goto error;
@@ -5625,6 +5681,16 @@ structmeta_construct_fields(StructMetaInfo *info, MsgspecState *mod) {
         PyErr_SetString(
             PyExc_ValueError,
             "Cannot set `dict=False` if base class already has `dict=True`"
+        );
+        return -1;
+    }
+    if (info->cache_hash == OPT_TRUE && !info->hash_offset) {
+        if (PyList_Append(info->slots, mod->str___msgspec_cached_hash__) < 0) return -1;
+    }
+    else if (info->cache_hash == OPT_FALSE && info->hash_offset) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "Cannot set `cache_hash=False` if base class already has `cache_hash=True`"
         );
         return -1;
     }
@@ -5799,7 +5865,9 @@ structmeta_construct_tag(StructMetaInfo *info, MsgspecState *mod, PyObject *cls)
 }
 
 static int
-structmeta_construct_offsets(StructMetaInfo *info, StructMetaObject *cls) {
+structmeta_construct_offsets(
+    StructMetaInfo *info, MsgspecState *mod, StructMetaObject *cls
+) {
     PyMemberDef *mp = MS_PyHeapType_GET_MEMBERS(cls);
     for (Py_ssize_t i = 0; i < Py_SIZE(cls); i++, mp++) {
         PyObject *offset = PyLong_FromSsize_t(mp->offset);
@@ -5821,6 +5889,19 @@ structmeta_construct_offsets(StructMetaInfo *info, StructMetaObject *cls) {
         }
         info->offsets[i] = PyLong_AsSsize_t(offset);
     }
+
+    if (info->cache_hash == OPT_TRUE && info->hash_offset == 0) {
+        PyObject *offset = PyDict_GetItem(
+            info->offsets_lk, mod->str___msgspec_cached_hash__
+        );
+        if (offset == NULL) {
+            PyErr_Format(
+                PyExc_RuntimeError, "Failed to get offset for %R", mod->str___msgspec_cached_hash__
+            );
+            return -1;
+        }
+        info->hash_offset = PyLong_AsSsize_t(offset);
+    }
     return 0;
 }
 
@@ -5832,7 +5913,7 @@ StructMeta_new_inner(
     int arg_omit_defaults, int arg_forbid_unknown_fields,
     int arg_frozen, int arg_eq, int arg_order, bool arg_kw_only,
     int arg_repr_omit_defaults, int arg_array_like,
-    int arg_gc, int arg_weakref, int arg_dict
+    int arg_gc, int arg_weakref, int arg_dict, int arg_cache_hash
 ) {
     StructMetaObject *cls = NULL;
     MsgspecState *mod = msgspec_get_global_state();
@@ -5873,6 +5954,8 @@ StructMeta_new_inner(
         .already_has_weakref = false,
         .dict = arg_dict,
         .already_has_dict = false,
+        .cache_hash = arg_cache_hash,
+        .hash_offset = 0,
         .has_non_struct_bases = false,
     };
 
@@ -5916,6 +5999,11 @@ StructMeta_new_inner(
 
     if (info.eq == OPT_FALSE && info.order == OPT_TRUE) {
         PyErr_SetString(PyExc_ValueError, "Cannot set eq=False and order=True");
+        goto cleanup;
+    }
+
+    if (info.cache_hash == OPT_TRUE && info.frozen != OPT_TRUE) {
+        PyErr_SetString(PyExc_ValueError, "Cannot set cache_hash=True without frozen=True");
         goto cleanup;
     }
 
@@ -5979,7 +6067,7 @@ StructMeta_new_inner(
     if (structmeta_construct_tag(&info, mod, (PyObject *)cls) < 0) goto cleanup;
 
     /* Fill in struct offsets */
-    if (structmeta_construct_offsets(&info, cls) < 0) goto cleanup;
+    if (structmeta_construct_offsets(&info, mod, cls) < 0) goto cleanup;
 
     /* Cache access to __post_init__ (if defined). */
     cls->post_init = PyObject_GetAttr((PyObject *)cls, mod->str___post_init__);
@@ -6006,6 +6094,7 @@ StructMeta_new_inner(
     cls->struct_tag_value = info.tag_value;
     Py_XINCREF(info.rename);
     cls->rename = info.rename;
+    cls->hash_offset = info.hash_offset;
     cls->frozen = info.frozen;
     cls->eq = info.eq;
     cls->order = info.order;
@@ -6051,7 +6140,7 @@ StructMeta_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
     int arg_omit_defaults = -1, arg_forbid_unknown_fields = -1;
     int arg_frozen = -1, arg_eq = -1, arg_order = -1, arg_repr_omit_defaults = -1;
     int arg_array_like = -1, arg_gc = -1, arg_weakref = -1, arg_dict = -1;
-    int arg_kw_only = 0;
+    int arg_kw_only = 0, arg_cache_hash = -1;
 
     char *kwlist[] = {
         "name", "bases", "dict",
@@ -6059,19 +6148,19 @@ StructMeta_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
         "omit_defaults", "forbid_unknown_fields",
         "frozen", "eq", "order", "kw_only",
         "repr_omit_defaults", "array_like",
-        "gc", "weakref", "dict",
+        "gc", "weakref", "dict", "cache_hash",
         NULL
     };
 
     /* Parse arguments: (name, bases, dict) */
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "UO!O!|$OOOppppppppppp:StructMeta.__new__", kwlist,
+            args, kwargs, "UO!O!|$OOOpppppppppppp:StructMeta.__new__", kwlist,
             &name, &PyTuple_Type, &bases, &PyDict_Type, &namespace,
             &arg_tag_field, &arg_tag, &arg_rename,
             &arg_omit_defaults, &arg_forbid_unknown_fields,
             &arg_frozen, &arg_eq, &arg_order, &arg_kw_only,
             &arg_repr_omit_defaults, &arg_array_like,
-            &arg_gc, &arg_weakref, &arg_dict
+            &arg_gc, &arg_weakref, &arg_dict, &arg_cache_hash
         )
     )
         return NULL;
@@ -6082,7 +6171,7 @@ StructMeta_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
         arg_omit_defaults, arg_forbid_unknown_fields,
         arg_frozen, arg_eq, arg_order, arg_kw_only,
         arg_repr_omit_defaults, arg_array_like,
-        arg_gc, arg_weakref, arg_dict
+        arg_gc, arg_weakref, arg_dict, arg_cache_hash
     );
 }
 
@@ -6092,7 +6181,7 @@ PyDoc_STRVAR(msgspec_defstruct__doc__,
 "tag_field=None, tag=None, rename=None, omit_defaults=False, "
 "forbid_unknown_fields=False, frozen=False, eq=True, order=False, "
 "kw_only=False, repr_omit_defaults=False, array_like=False, gc=True, "
-"weakref=False, dict=False)\n"
+"weakref=False, dict=False, cache_hash=False)\n"
 "--\n"
 "\n"
 "Dynamically define a new Struct class.\n"
@@ -6103,8 +6192,9 @@ PyDoc_STRVAR(msgspec_defstruct__doc__,
 "    The name of the new Struct class.\n"
 "fields : iterable\n"
 "    An iterable of fields in the new class. Elements may be either ``name``,\n"
-"    tuples of ``(name, type)``, or ``(name, type, default)``. Fields without\n"
-"    a specified type will default to ``typing.Any``.\n"
+"    tuples of ``(name, type)``, ``(name, type, default)``, or \n"
+"    ``(name, type, msgspec.field)``. Fields without a specified type will \n"
+"    default to ``typing.Any``.\n"
 "bases : tuple, optional\n"
 "    A tuple of any Struct base classes to use when defining the new class.\n"
 "module : str, optional\n"
@@ -6116,6 +6206,20 @@ PyDoc_STRVAR(msgspec_defstruct__doc__,
 "**kwargs :\n"
 "    Additional Struct configuration options. See the ``Struct`` docs for more\n"
 "    information.\n"
+"\n"
+"Examples\n"
+"--------\n"
+">>> from msgspec import defstruct, field\n"
+">>> User = defstruct(\n"
+"...     'User',\n"
+"...     [\n"
+"...         ('name', str),\n"
+"...         ('email', str | None, None),\n"
+"...         ('groups', set[str], field(default_factory=set)),\n"
+"...     ],\n"
+"... )\n"
+">>> User('alice')\n"
+"User(name='alice', email=None, groups=set())\n"
 "\n"
 "See Also\n"
 "--------\n"
@@ -6130,7 +6234,7 @@ msgspec_defstruct(PyObject *self, PyObject *args, PyObject *kwargs)
     int arg_omit_defaults = -1, arg_forbid_unknown_fields = -1;
     int arg_frozen = -1, arg_eq = -1, arg_order = -1, arg_kw_only = 0;
     int arg_repr_omit_defaults = -1, arg_array_like = -1;
-    int arg_gc = -1, arg_weakref = -1, arg_dict = -1;
+    int arg_gc = -1, arg_weakref = -1, arg_dict = -1, arg_cache_hash = -1;
 
     char *kwlist[] = {
         "name", "fields", "bases", "module", "namespace",
@@ -6138,19 +6242,19 @@ msgspec_defstruct(PyObject *self, PyObject *args, PyObject *kwargs)
         "omit_defaults", "forbid_unknown_fields",
         "frozen", "eq", "order", "kw_only",
         "repr_omit_defaults", "array_like",
-        "gc", "weakref", "dict",
+        "gc", "weakref", "dict", "cache_hash",
         NULL
     };
 
     /* Parse arguments: (name, bases, dict) */
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwargs, "UO|$OOOOOOppppppppppp:defstruct", kwlist,
+            args, kwargs, "UO|$OOOOOOpppppppppppp:defstruct", kwlist,
             &name, &fields, &bases, &module, &namespace,
             &arg_tag_field, &arg_tag, &arg_rename,
             &arg_omit_defaults, &arg_forbid_unknown_fields,
             &arg_frozen, &arg_eq, &arg_order, &arg_kw_only,
             &arg_repr_omit_defaults, &arg_array_like,
-            &arg_gc, &arg_weakref, &arg_dict)
+            &arg_gc, &arg_weakref, &arg_dict, &arg_cache_hash)
     )
         return NULL;
 
@@ -6238,7 +6342,7 @@ msgspec_defstruct(PyObject *self, PyObject *args, PyObject *kwargs)
         arg_omit_defaults, arg_forbid_unknown_fields,
         arg_frozen, arg_eq, arg_order, arg_kw_only,
         arg_repr_omit_defaults, arg_array_like,
-        arg_gc, arg_weakref, arg_dict
+        arg_gc, arg_weakref, arg_dict, arg_cache_hash
     );
 
 cleanup:
@@ -6596,6 +6700,16 @@ StructConfig_dict(StructConfig *self, void *closure)
 }
 
 static PyObject*
+StructConfig_cache_hash(StructConfig *self, void *closure)
+{
+    StructMetaObject *type = (StructMetaObject *)(self->st_type);
+    if (type->hash_offset != 0) {
+        Py_RETURN_TRUE;
+    }
+    Py_RETURN_FALSE;
+}
+
+static PyObject*
 StructConfig_repr_omit_defaults(StructConfig *self, void *closure)
 {
     if (self->st_type->repr_omit_defaults == OPT_TRUE) { Py_RETURN_TRUE; }
@@ -6643,6 +6757,7 @@ static PyGetSetDef StructConfig_getset[] = {
     {"gc", (getter) StructConfig_gc, NULL, NULL, NULL},
     {"weakref", (getter) StructConfig_weakref, NULL, NULL, NULL},
     {"dict", (getter) StructConfig_dict, NULL, NULL, NULL},
+    {"cache_hash", (getter) StructConfig_cache_hash, NULL, NULL, NULL},
     {"omit_defaults", (getter) StructConfig_omit_defaults, NULL, NULL, NULL},
     {"forbid_unknown_fields", (getter) StructConfig_forbid_unknown_fields, NULL, NULL, NULL},
     {"tag", (getter) StructConfig_tag, NULL, NULL, NULL},
@@ -6692,6 +6807,7 @@ PyDoc_STRVAR(StructConfig__doc__,
 "forbid_unknown_fields: bool\n"
 "weakref: bool\n"
 "dict: bool\n"
+"cache_hash: bool\n"
 "tag_field: str | None\n"
 "tag: str | int | None"
 );
@@ -7078,20 +7194,46 @@ Struct_hash(PyObject *self) {
         return PyObject_HashNotImplemented(self);
     }
 
-    nfields = StructMeta_GET_NFIELDS(Py_TYPE(self));
+    if (MS_UNLIKELY(st_type->hash_offset != 0)) {
+        PyObject *cached_hash = *(PyObject **)((char *)self + st_type->hash_offset);
+        if (cached_hash != NULL) {
+            /* Use the cached hash */
+            return PyLong_AsSsize_t(cached_hash);
+        }
+    }
 
+    /* First hash the type by its pointer */
+    size_t type_id = (size_t)((void *)st_type);
+    /* The lower bits are likely to be 0; rotate by 4 */
+    type_id = (type_id >> 4) | (type_id << (8 * sizeof(void *) - 4));
+    acc += type_id * MS_HASH_XXPRIME_2;
+    acc = MS_HASH_XXROTATE(acc);
+    acc *= MS_HASH_XXPRIME_1;
+
+    /* Then hash all the fields */
+    nfields = StructMeta_GET_NFIELDS(Py_TYPE(self));
     for (i = 0; i < nfields; i++) {
-        Py_uhash_t lane;
         val = Struct_get_index(self, i);
         if (val == NULL) return -1;
-        lane = PyObject_Hash(val);
-        if (lane == (Py_uhash_t)-1) return -1;
-        acc += lane * MS_HASH_XXPRIME_2;
+        Py_uhash_t item_hash = PyObject_Hash(val);
+        if (item_hash == (Py_uhash_t)-1) return -1;
+        acc += item_hash * MS_HASH_XXPRIME_2;
         acc = MS_HASH_XXROTATE(acc);
         acc *= MS_HASH_XXPRIME_1;
     }
-    acc += nfields ^ (MS_HASH_XXPRIME_5 ^ 3527539UL);
-    return (acc == (Py_uhash_t)-1) ?  1546275796 : acc;
+    acc += (1 + nfields) ^ (MS_HASH_XXPRIME_5 ^ 3527539UL);
+
+    Py_uhash_t hash = (acc == (Py_uhash_t)-1) ?  1546275796 : acc;
+
+    if (MS_UNLIKELY(st_type->hash_offset != 0)) {
+        /* Cache the hash */
+        char *addr = (char *)self + st_type->hash_offset;
+        PyObject *cached_hash = PyLong_FromSsize_t(hash);
+        if (cached_hash == NULL) return -1;
+        *(PyObject **)addr = cached_hash;
+    }
+
+    return hash;
 }
 
 static PyObject *
@@ -7109,6 +7251,28 @@ Struct_richcompare(PyObject *self, PyObject *other, int op) {
     }
     else if (st_type->order != OPT_TRUE) {
         Py_RETURN_NOTIMPLEMENTED;
+    }
+
+    if (
+        MS_UNLIKELY(op == Py_NE && (Py_TYPE(self)->tp_richcompare != Struct_richcompare))
+    ) {
+        /* This case is hit when a subclass has manually defined `__eq__` but
+         * not `__ne__`. In this case we want to dispatch to `__eq__` and invert
+         * the result, rather than relying on the default `__ne__` implementation.
+         */
+        PyObject *out = Py_TYPE(self)->tp_richcompare(self, other, Py_EQ);
+        if (out != NULL && out != Py_NotImplemented) {
+            int is_true = PyObject_IsTrue(out);
+            Py_DECREF(out);
+            if (is_true < 0) {
+                out = NULL;
+            }
+            else {
+                out = is_true ? Py_False : Py_True;
+                Py_INCREF(out);
+            }
+        }
+        return out;
     }
 
     int equal = 1;
@@ -7398,6 +7562,45 @@ error:
     return NULL;
 }
 
+PyDoc_STRVAR(struct_force_setattr__doc__,
+"force_setattr(struct, name, value)\n"
+"--\n"
+"\n"
+"Set an attribute on a struct, even if the struct is frozen.\n"
+"\n"
+"The main use case for this is modifying a frozen struct in a ``__post_init__``\n"
+"method before returning.\n"
+"\n"
+".. warning::\n\n"
+"  This function violates the guarantees of a frozen struct, and is potentially\n"
+"  unsafe. Only use it if you know what you're doing!\n"
+"\n"
+"Parameters\n"
+"----------\n"
+"struct: Struct\n"
+"    The struct instance.\n"
+"name: str\n"
+"    The attribute name.\n"
+"value: Any\n"
+"    The attribute value."
+);
+static PyObject*
+struct_force_setattr(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
+{
+    if (!check_positional_nargs(nargs, 3, 3)) return NULL;
+    PyObject *obj = args[0];
+    PyObject *name = args[1];
+    PyObject *value = args[2];
+    if (Py_TYPE(Py_TYPE(obj)) != &StructMetaType) {
+        PyErr_SetString(PyExc_TypeError, "`struct` must be a `msgspec.Struct`");
+        return NULL;
+    }
+    if (PyObject_GenericSetAttr(obj, name, value) < 0) {
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyObject *
 Struct_reduce(PyObject *self, PyObject *args)
 {
@@ -7609,6 +7812,11 @@ PyDoc_STRVAR(Struct__doc__,
 "   Whether instances of this type will include a ``__dict__``. Setting this to\n"
 "   True will allow adding additional undeclared attributes to a struct instance,\n"
 "   which may be useful for holding private runtime state. Defaults to False.\n"
+"cache_hash: bool, default False\n"
+"   If enabled, the hash of a frozen struct instance will be computed at most\n"
+"   once, and then cached on the instance for further reuse. For expensive\n"
+"   hash values this can improve performance at the cost of a small amount of\n"
+"   memory usage.\n"
 "\n"
 "Examples\n"
 "--------\n"
@@ -7631,7 +7839,7 @@ PyDoc_STRVAR(Struct__doc__,
 "...     y: float\n"
 "...\n"
 ">>> {Point(1.5, 2.0): 1}  # frozen structs are hashable\n"
-"{Point(1.5, 2.0): 1}"
+"{Point(x=1.5, y=2.0): 1}"
 );
 
 static int
@@ -9148,14 +9356,14 @@ ms_encode_err_type_unsupported(PyTypeObject *type) {
  *************************************************************************/
 
 #define MS_HAS_TZINFO(o)  (((_PyDateTime_BaseTZInfo *)(o))->hastzinfo)
-#if PY_VERSION_HEX < 0x030a00f0
+#if PY310_PLUS
+#define MS_DATE_GET_TZINFO(o) PyDateTime_DATE_GET_TZINFO(o)
+#define MS_TIME_GET_TZINFO(o) PyDateTime_TIME_GET_TZINFO(o)
+#else
 #define MS_DATE_GET_TZINFO(o)      (MS_HAS_TZINFO(o) ? \
     ((PyDateTime_DateTime *)(o))->tzinfo : Py_None)
 #define MS_TIME_GET_TZINFO(o)      (MS_HAS_TZINFO(o) ? \
     ((PyDateTime_Time *)(o))->tzinfo : Py_None)
-#else
-#define MS_DATE_GET_TZINFO(o) PyDateTime_DATE_GET_TZINFO(o)
-#define MS_TIME_GET_TZINFO(o) PyDateTime_TIME_GET_TZINFO(o)
 #endif
 
 #ifndef TIMEZONE_CACHE_SIZE
@@ -12458,11 +12666,20 @@ cleanup:
     return status;
 }
 
+static int json_encode_dict_key_noinline(EncoderState *, PyObject *);
+
+static MS_INLINE int
+json_encode_dict_key(EncoderState *self, PyObject *key) {
+    if (MS_LIKELY(PyUnicode_Check(key))) {
+        return json_encode_str(self, key);
+    }
+    return json_encode_dict_key_noinline(self, key);
+}
+
 static MS_NOINLINE int
-json_encode_dict_key(EncoderState *self, PyObject *obj) {
+json_encode_dict_key_noinline(EncoderState *self, PyObject *obj) {
     PyTypeObject *type = Py_TYPE(obj);
 
-    /* PyUnicode_Type is handled inline in json_encode_dict */
     if (type == &PyLong_Type) {
         return json_encode_long_as_str(self, obj);
     }
@@ -12493,6 +12710,18 @@ json_encode_dict_key(EncoderState *self, PyObject *obj) {
     else if (PyType_IsSubtype(type, (PyTypeObject *)(self->mod->UUIDType))) {
         return json_encode_uuid(self, obj);
     }
+    else if (self->enc_hook != NULL) {
+        int status = -1;
+        PyObject *temp;
+        temp = CALL_ONE_ARG(self->enc_hook, obj);
+        if (temp == NULL) return -1;
+        if (!Py_EnterRecursiveCall(" while serializing an object")) {
+            status = json_encode_dict_key(self, temp);
+            Py_LeaveRecursiveCall();
+        }
+        Py_DECREF(temp);
+        return status;
+    }
     else {
         PyErr_SetString(
             PyExc_TypeError,
@@ -12514,12 +12743,7 @@ json_encode_dict(EncoderState *self, PyObject *obj)
     if (ms_write(self, "{", 1) < 0) return -1;
     if (Py_EnterRecursiveCall(" while serializing an object")) return -1;
     while (PyDict_Next(obj, &pos, &key, &val)) {
-        if (MS_LIKELY(PyUnicode_Check(key))) {
-            if (json_encode_str(self, key) < 0) goto cleanup;
-        }
-        else {
-            if (json_encode_dict_key(self, key) < 0) goto cleanup;
-        }
+        if (json_encode_dict_key(self, key) < 0) goto cleanup;
         if (ms_write(self, ":", 1) < 0) goto cleanup;
         if (json_encode_inline(self, val) < 0) goto cleanup;
         if (ms_write(self, ",", 1) < 0) goto cleanup;
@@ -14552,7 +14776,7 @@ static struct PyMethodDef Decoder_methods[] = {
         "decode", (PyCFunction) Decoder_decode, METH_FASTCALL,
         Decoder_decode__doc__,
     },
-#if PY_VERSION_HEX >= 0x03090000
+#if PY39_PLUS
     {"__class_getitem__", Py_GenericAlias, METH_O|METH_CLASS},
 #endif
     {NULL, NULL}                /* sentinel */
@@ -15608,6 +15832,9 @@ json_decode_dict_key_fallback(
         }
         else {
             out = PyUnicode_DecodeUTF8(view, size, NULL);
+        }
+        if (MS_UNLIKELY(type->types & (MS_TYPE_CUSTOM | MS_TYPE_CUSTOM_GENERIC))) {
+            return ms_decode_custom(out, self->dec_hook, type, path);
         }
         return ms_check_str_constraints(out, type, path);
     }
@@ -17412,7 +17639,7 @@ PyDoc_STRVAR(JSONDecoder_decode_lines__doc__,
 "... \"\"\"\n"
 ">>> dec = msgspec.json.Decoder()\n"
 ">>> dec.decode_lines(msg)\n"
-"[{\"x\": 1, \"y\": 2}, {\"x\": 3, \"y\": 4}]"
+"[{'x': 1, 'y': 2}, {'x': 3, 'y': 4}]"
 );
 static PyObject*
 JSONDecoder_decode_lines(JSONDecoder *self, PyObject *const *args, Py_ssize_t nargs)
@@ -17492,7 +17719,7 @@ static struct PyMethodDef JSONDecoder_methods[] = {
         "decode_lines", (PyCFunction) JSONDecoder_decode_lines, METH_FASTCALL,
         JSONDecoder_decode_lines__doc__,
     },
-#if PY_VERSION_HEX >= 0x03090000
+#if PY39_PLUS
     {"__class_getitem__", Py_GenericAlias, METH_O|METH_CLASS},
 #endif
     {NULL, NULL}                /* sentinel */
@@ -19515,7 +19742,7 @@ convert(
     else if (pytype == PyDateTimeAPI->DeltaType) {
         return convert_immutable(self, MS_TYPE_TIMEDELTA, "duration", obj, type, path);
     }
-    else if (pytype == (PyTypeObject *)self->mod->UUIDType) {
+    else if (PyType_IsSubtype(pytype, (PyTypeObject *)(self->mod->UUIDType))) {
         return convert_immutable(self, MS_TYPE_UUID, "uuid", obj, type, path);
     }
     else if (pytype == (PyTypeObject *)self->mod->DecimalType) {
@@ -19685,6 +19912,10 @@ static struct PyMethodDef msgspec_methods[] = {
         msgspec_defstruct__doc__,
     },
     {
+        "force_setattr", (PyCFunction) struct_force_setattr, METH_FASTCALL,
+        struct_force_setattr__doc__,
+    },
+    {
         "msgpack_encode", (PyCFunction) msgspec_msgpack_encode, METH_FASTCALL | METH_KEYWORDS,
         msgspec_msgpack_encode__doc__,
     },
@@ -19727,6 +19958,7 @@ msgspec_clear(PyObject *m)
     Py_CLEAR(st->struct_lookup_cache);
     Py_CLEAR(st->str___weakref__);
     Py_CLEAR(st->str___dict__);
+    Py_CLEAR(st->str___msgspec_cached_hash__);
     Py_CLEAR(st->str__value2member_map_);
     Py_CLEAR(st->str___msgspec_cache__);
     Py_CLEAR(st->str__value_);
@@ -19747,6 +19979,9 @@ msgspec_clear(PyObject *m)
     Py_CLEAR(st->str___post_init__);
     Py_CLEAR(st->str___attrs_attrs__);
     Py_CLEAR(st->str___supertype__);
+#if PY312_PLUS
+    Py_CLEAR(st->str___value__);
+#endif
     Py_CLEAR(st->str___bound__);
     Py_CLEAR(st->str___constraints__);
     Py_CLEAR(st->str_int);
@@ -19768,8 +20003,11 @@ msgspec_clear(PyObject *m)
     Py_CLEAR(st->get_class_annotations);
     Py_CLEAR(st->get_typeddict_info);
     Py_CLEAR(st->rebuild);
-#if PY_VERSION_HEX >= 0x030a00f0
+#if PY310_PLUS
     Py_CLEAR(st->types_uniontype);
+#endif
+#if PY312_PLUS
+    Py_CLEAR(st->typing_typealiastype);
 #endif
     Py_CLEAR(st->astimezone);
     Py_CLEAR(st->re_compile);
@@ -19834,8 +20072,11 @@ msgspec_traverse(PyObject *m, visitproc visit, void *arg)
     Py_VISIT(st->get_class_annotations);
     Py_VISIT(st->get_typeddict_info);
     Py_VISIT(st->rebuild);
-#if PY_VERSION_HEX >= 0x030a00f0
+#if PY310_PLUS
     Py_VISIT(st->types_uniontype);
+#endif
+#if PY312_PLUS
+    Py_VISIT(st->typing_typealiastype);
 #endif
     Py_VISIT(st->astimezone);
     Py_VISIT(st->re_compile);
@@ -20029,6 +20270,9 @@ PyInit__core(void)
     SET_REF(typing_final, "Final");
     SET_REF(typing_generic, "Generic");
     SET_REF(typing_generic_alias, "_GenericAlias");
+#if PY312_PLUS
+    SET_REF(typing_typealiastype, "TypeAliasType");
+#endif
     Py_DECREF(temp_module);
 
     temp_module = PyImport_ImportModule("msgspec._utils");
@@ -20041,7 +20285,7 @@ PyInit__core(void)
     SET_REF(rebuild, "rebuild");
     Py_DECREF(temp_module);
 
-#if PY_VERSION_HEX >= 0x030a00f0
+#if PY310_PLUS
     temp_module = PyImport_ImportModule("types");
     if (temp_module == NULL) return NULL;
     SET_REF(types_uniontype, "UnionType");
@@ -20102,6 +20346,7 @@ PyInit__core(void)
     if ((st->attr = PyUnicode_InternFromString(str)) == NULL) return NULL
     CACHED_STRING(str___weakref__, "__weakref__");
     CACHED_STRING(str___dict__, "__dict__");
+    CACHED_STRING(str___msgspec_cached_hash__, "__msgspec_cached_hash__");
     CACHED_STRING(str__value2member_map_, "_value2member_map_");
     CACHED_STRING(str___msgspec_cache__, "__msgspec_cache__");
     CACHED_STRING(str__value_, "_value_");
@@ -20122,6 +20367,9 @@ PyInit__core(void)
     CACHED_STRING(str___post_init__, "__post_init__");
     CACHED_STRING(str___attrs_attrs__, "__attrs_attrs__");
     CACHED_STRING(str___supertype__, "__supertype__");
+#if PY312_PLUS
+    CACHED_STRING(str___value__, "__value__");
+#endif
     CACHED_STRING(str___bound__, "__bound__");
     CACHED_STRING(str___constraints__, "__constraints__");
     CACHED_STRING(str_int, "int");

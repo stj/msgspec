@@ -756,6 +756,14 @@ class TestUUID:
             with pytest.raises(ValidationError, match="Expected `uuid`, got `bytes`"):
                 convert(typ(u.bytes), uuid.UUID, builtin_types=(uuid.UUID,))
 
+    def test_convert_uuid_subclass(self):
+        class UUID2(uuid.UUID):
+            ...
+
+        u1 = uuid.uuid4()
+        u2 = UUID2(str(u1))
+        assert convert(u2, uuid.UUID) is u2
+
 
 class TestDecimal:
     def test_decimal_wrong_type(self):
@@ -1024,11 +1032,17 @@ class TestSequences:
             for _ in range(depth):
                 typ = FrozenSet[typ]
 
-        msg = []
-        msg.append(msg)
+        class Cache(Struct):
+            value: typ
+
+        msgspec.json.Decoder(Cache)
+
+        arr = []
+        arr.append(arr)
+        msg = {"value": arr}
         with pytest.raises(RecursionError):
             with max_call_depth(5):
-                assert convert(msg, typ)
+                convert(msg, Cache)
 
     @pytest.mark.parametrize("out_type", [list, tuple, set, frozenset])
     @uses_annotated
@@ -1238,11 +1252,19 @@ class TestDict:
         typ = Dict[str, int]
         for _ in range(depth):
             typ = Dict[str, typ]
-        msg = dictcls()
-        msg["x"] = msg
+
+        class Cache(Struct):
+            value: typ
+
+        msgspec.json.Decoder(Cache)
+
+        map = dictcls()
+        map["x"] = map
+        msg = {"value": map}
+
         with pytest.raises(RecursionError):
             with max_call_depth(5):
-                assert convert(msg, typ)
+                convert(msg, Cache)
 
     @uses_annotated
     def test_dict_constrs(self, dictcls):

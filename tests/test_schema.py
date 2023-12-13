@@ -61,7 +61,7 @@ def test_msgpack_ext():
 
 
 def test_custom():
-    with pytest.raises(TypeError, match="Custom types"):
+    with pytest.raises(TypeError, match="Generating JSON schema for custom types"):
         assert msgspec.json.schema(complex)
 
     schema = {"type": "string", "format": "complex"}
@@ -70,6 +70,24 @@ def test_custom():
         msgspec.json.schema(Annotated[complex, Meta(extra_json_schema=schema)])
         == schema
     )
+
+
+def test_custom_schema_hook():
+    schema = {"type": "string", "format": "complex"}
+
+    def schema_hook(cls):
+        if cls is complex:
+            return schema
+        raise NotImplementedError
+
+    assert msgspec.json.schema(complex, schema_hook=schema_hook) == schema
+    assert msgspec.json.schema(
+        Annotated[complex, Meta(extra_json_schema={"title": "A complex field"})],
+        schema_hook=schema_hook,
+    ) == {**schema, "title": "A complex field"}
+
+    with pytest.raises(TypeError, match="Generating JSON schema for custom types"):
+        msgspec.json.schema(slice, schema_hook=schema_hook)
 
 
 def test_none():
@@ -967,6 +985,23 @@ def test_numeric_metadata(field, constraint):
 def test_string_metadata(field, val, constraint):
     typ = Annotated[str, Meta(**{field: val})]
     assert msgspec.json.schema(typ) == {"type": "string", constraint: val}
+
+
+@pytest.mark.parametrize(
+    "field, val, constraint",
+    [
+        ("pattern", "[a-z]*", "pattern"),
+        ("min_length", 0, "minLength"),
+        ("max_length", 3, "maxLength"),
+    ],
+)
+def test_dict_key_metadata(field, val, constraint):
+    typ = Annotated[str, Meta(**{field: val})]
+    assert msgspec.json.schema(Dict[typ, int]) == {
+        "type": "object",
+        "additionalProperties": {"type": "integer"},
+        "propertyNames": {constraint: val},
+    }
 
 
 @pytest.mark.parametrize("typ", [bytes, bytearray])

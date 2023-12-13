@@ -159,6 +159,13 @@ def test_struct_subclass_forbidden_field_names():
         class Test2(Struct):
             __dict__: int
 
+    with pytest.raises(
+        TypeError, match="Cannot have a struct field named '__msgspec_cached_hash__'"
+    ):
+
+        class Test3(Struct):
+            __msgspec_cached_hash__: int
+
 
 class TestMixins:
     def test_mixin_no_slots(self):
@@ -1423,6 +1430,56 @@ def test_dict_option():
             pass
 
 
+def test_cache_hash_option():
+    with pytest.raises(
+        ValueError, match="Cannot set cache_hash=True without frozen=True"
+    ):
+
+        class Invalid(Struct, cache_hash=True):
+            pass
+
+    class Default(Struct, frozen=True):
+        pass
+
+    assert "__msgspec_cached_hash__" not in Default.__slots__
+    assert not Default.__struct_config__.cache_hash
+
+    class Enabled(Struct, cache_hash=True, frozen=True):
+        pass
+
+    assert "__msgspec_cached_hash__" in Enabled.__slots__
+    assert Enabled.__struct_config__.cache_hash
+
+    class Disabled(Struct, cache_hash=False, frozen=True):
+        pass
+
+    assert "__msgspec_cached_hash__" not in Disabled.__slots__
+    assert not Disabled.__struct_config__.cache_hash
+
+    class T(Enabled):
+        pass
+
+    assert "__msgspec_cached_hash__" not in T.__slots__
+    assert T.__struct_config__.cache_hash
+
+    class T(Enabled, Default):
+        pass
+
+    assert "__msgspec_cached_hash__" not in T.__slots__
+    assert T.__struct_config__.cache_hash
+
+    class T(Default, Disabled, Enabled):
+        pass
+
+    assert "__msgspec_cached_hash__" not in T.__slots__
+    assert T.__struct_config__.cache_hash
+
+    with pytest.raises(ValueError, match="Cannot set `cache_hash=False`"):
+
+        class T(Enabled, cache_hash=False):
+            pass
+
+
 def test_invalid_option_raises():
     with pytest.raises(TypeError):
 
@@ -1435,12 +1492,7 @@ class FrozenPoint(Struct, frozen=True):
     y: int
 
 
-class TestSetAttr:
-    def test_frozen_objects_no_setattr(self):
-        p = FrozenPoint(1, 2)
-        with pytest.raises(AttributeError, match="immutable type: 'FrozenPoint'"):
-            p.x = 3
-
+class TestHash:
     def test_frozen_objects_hashable(self):
         p1 = FrozenPoint(1, 2)
         p2 = FrozenPoint(1, 2)
@@ -1459,6 +1511,43 @@ class TestSetAttr:
         p = Point(1, 2)
         with pytest.raises(TypeError, match="unhashable type"):
             hash(p)
+
+    def test_hash_includes_type(self):
+        Ex1 = defstruct("Ex1", ["x"], frozen=True)
+        Ex2 = defstruct("Ex2", ["x"], frozen=True)
+        Ex3 = defstruct("Ex3", [], frozen=True)
+        Ex4 = defstruct("Ex4", [], frozen=True)
+        assert hash(Ex1(1)) == hash(Ex1(1))
+        assert hash(Ex1(1)) != hash(Ex2(1))
+        assert hash(Ex3()) == hash(Ex3())
+        assert hash(Ex3()) != hash(Ex4())
+
+    def test_cache_hash(self):
+        class Inner:
+            def __init__(self):
+                self.hash_calls = 0
+
+            def __hash__(self):
+                self.hash_calls += 1
+                return 123
+
+        class Cached(Struct, frozen=True, cache_hash=True):
+            x: int
+            y: Inner
+
+        assert "__msgspec_cached_hash__" in Cached.__slots__
+        obj = Cached(1, Inner())
+        assert not hasattr(obj, "__msgspec_cached_hash__")
+        assert hash(obj) == hash(obj)
+        assert obj.__msgspec_cached_hash__ == hash(obj)
+        assert obj.y.hash_calls == 1
+
+
+class TestSetAttr:
+    def test_frozen_objects_no_setattr(self):
+        p = FrozenPoint(1, 2)
+        with pytest.raises(AttributeError, match="immutable type: 'FrozenPoint'"):
+            p.x = 3
 
     @pytest.mark.parametrize("base_gc", [True, None, False])
     @pytest.mark.parametrize("base_frozen", [True, False])
@@ -1511,6 +1600,22 @@ class TestSetAttr:
             t.x = [1]
             assert gc.is_tracked(t)
 
+    def test_force_setattr(self):
+        class Ex(Struct, frozen=True):
+            x: Any
+
+        obj = Ex(1)
+
+        res = msgspec.structs.force_setattr(obj, "x", 2)
+        assert res is None
+        assert obj.x == 2
+
+        with pytest.raises(AttributeError):
+            msgspec.structs.force_setattr(obj, "oops", 3)
+
+        with pytest.raises(TypeError):
+            msgspec.structs.force_setattr(1, "oops", 3)
+
 
 class TestOrderAndEq:
     @staticmethod
@@ -1561,6 +1666,21 @@ class TestOrderAndEq:
         self.assert_neq(x, Test(1, 3))
         self.assert_neq(x, Test(2, 2))
         self.assert_neq(x, Test2(1, 2))
+
+    def test_struct_override_eq(self):
+        class Ex(Struct):
+            a: int
+            b: int
+
+            def __eq__(self, other):
+                return self.a == other.a
+
+        x = Ex(1, 2)
+        y = Ex(1, 3)
+        z = Ex(2, 3)
+
+        self.assert_eq(x, y)
+        self.assert_neq(x, z)
 
     def test_struct_eq_identity_fastpath(self):
         class Bad:
@@ -2094,6 +2214,16 @@ class TestDefStruct:
         Test = defstruct("Test", [], dict=True)
         assert hasattr(Test(), "__dict__")
         assert Test.__struct_config__.dict
+
+    def test_defstruct_cache_hash(self):
+        Test = defstruct("Test", [], frozen=True)
+        assert not Test.__struct_config__.cache_hash
+
+        Test = defstruct("Test", [], frozen=True, cache_hash=False)
+        assert not Test.__struct_config__.cache_hash
+
+        Test = defstruct("Test", [], frozen=True, cache_hash=True)
+        assert Test.__struct_config__.cache_hash
 
     def test_defstruct_tag_and_tag_field(self):
         Test = defstruct("Test", [], tag=True)
